@@ -5,24 +5,107 @@
   <title>Prompt Structure — Config</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="/style.css" />
+  <style>
+    /* --- New Styles for the Revamped Config UI --- */
+    .block-item, .add-block-form {
+      background-color: #f9f9f9;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      margin-bottom: 1rem;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+    .block-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 1rem;
+    }
+    .block-title {
+      flex: 1;
+      font-size: 1.1em;
+    }
+    .block-actions {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    .block-actions .reorder-btns {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-right: 0.5rem;
+    }
+    .block-actions .reorder-btns button {
+      line-height: 1;
+      padding: 2px 6px;
+    }
+    .edit-form {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+    .edit-form .form-row {
+      display: flex;
+      gap: 0.5rem;
+    }
+    .edit-form .form-row input, .edit-form .form-row select {
+      flex: 1;
+      padding: 0.5rem;
+    }
+    .edit-form textarea {
+      width: 100%;
+      min-height: 150px;
+      font-family: monospace;
+      padding: 0.5rem;
+      box-sizing: border-box; /* Important for 100% width */
+    }
+    .edit-form-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 0.5rem;
+    }
+    .edit-form-actions .cancel-btn {
+      background-color: #6c757d;
+    }
+    /* Hide edit form by default */
+    .block-item .edit-form {
+      display: none;
+    }
+    /* When editing, hide the header and show the form */
+    .block-item.is-editing .block-header {
+      display: none;
+    }
+    .block-item.is-editing .edit-form {
+      display: flex;
+    }
+  </style>
 </head>
 <body>
   <main class="container">
     <h1>Prompt Structure — Config</h1>
-    <p>Edit the prompt blocks below. The <strong>JanitorAI Default (Cannot change)</strong> block is immutable and acts as the placeholder for external inputs.</p>
+    <p>Arrange and edit your prompt blocks below. The <strong>JanitorAI Default (Cannot change)</strong> block is immutable and acts as the placeholder for external inputs.</p>
 
     <div id="blocksList">Loading...</div>
 
     <hr />
     <h3>Add new block</h3>
-    <input id="new_name" placeholder="Name (eg. 'Assistant Persona')" />
-    <select id="new_role">
-      <option value="system">system</option>
-      <option value="user">user</option>
-      <option value="assistant">assistant</option>
-    </select>
-    <textarea id="new_content" placeholder="Block content (string)"></textarea>
-    <button id="btnAddBlock">Add block</button>
+    <div id="addBlockBox" class="add-block-form">
+      <div class="form-row">
+        <input id="new_name" placeholder="Name (eg. 'Assistant Persona')" />
+        <select id="new_role">
+          <option value="system">system</option>
+          <option value="user">user</option>
+          <option value="assistant">assistant</option>
+        </select>
+      </div>
+      <textarea id="new_content" placeholder="Block content (string)"></textarea>
+      <div class="edit-form-actions">
+        <button id="btnAddBlock">Add block</button>
+      </div>
+    </div>
 
     <p><a href="/">Back to dashboard</a></p>
   </main>
@@ -35,76 +118,130 @@
       location.href = '/';
     }
 
-    function escapeHtml(unsafe) {
-      return unsafe
-           .replace(/&/g, "&amp;")
-           .replace(/</g, "&lt;")
-           .replace(/>/g, "&gt;")
-           .replace(/"/g, "&quot;")
-           .replace(/'/g, "&#039;");
-    }
+    // Store blocks data globally to access full content for editing
+    let allBlocks = [];
 
     async function api(path, opts = {}) {
-      const headers = opts.headers || {};
-      const r = await fetch(path, { headers: { 'Content-Type': 'application/json', ...headers }, body: opts.body ? JSON.stringify(opts.body) : undefined, method: opts.method || 'GET', credentials: 'include' });
-      const isJson = r.headers.get('content-type')?.includes('application/json');
-      const data = isJson ? await r.json() : await r.text();
-      if (!r.ok) throw data;
+      const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + proxyToken };
+      const res = await fetch(path, { method: opts.method || 'GET', headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
+      const isJson = res.headers.get('content-type')?.includes('application/json');
+      const data = isJson ? await res.json() : await res.text();
+      if (!res.ok) throw data;
       return data;
+    }
+
+    function renderBlocks() {
+      const html = allBlocks.map(b => `
+        <div class="block-item" id="block-${b.id}" data-id="${b.id}">
+          <!-- View Mode -->
+          <div class="block-header">
+            <div class="block-title">
+              <strong>${b.name}</strong> <small>(${b.role}) ${b.immutable ? '<em>immutable</em>' : ''}</small>
+            </div>
+            <div class="block-actions">
+              <div class="reorder-btns">
+                <button class="up-btn">↑</button>
+                <button class="down-btn">↓</button>
+              </div>
+              ${b.immutable ? '' : `<button class="edit-btn">Edit</button><button class="del-btn">Delete</button>`}
+            </div>
+          </div>
+
+          <!-- Edit Mode (hidden by default) -->
+          <div class="edit-form">
+            <div class="form-row">
+              <input class="edit-name" value="${b.name}" placeholder="Name" />
+              <select class="edit-role">
+                <option value="system" ${b.role === 'system' ? 'selected' : ''}>system</option>
+                <option value="user" ${b.role === 'user' ? 'selected' : ''}>user</option>
+                <option value="assistant" ${b.role === 'assistant' ? 'selected' : ''}>assistant</option>
+              </select>
+            </div>
+            <textarea class="edit-content" placeholder="Block content">${b.content || ''}</textarea>
+            <div class="edit-form-actions">
+              <button class="cancel-btn">Cancel</button>
+              <button class="save-btn">Save</button>
+            </div>
+          </div>
+        </div>
+      `).join('');
+      $('blocksList').innerHTML = html || '<i>No blocks</i>';
+      attachEventListeners();
+    }
+
+    function attachEventListeners() {
+      document.querySelectorAll('.block-item').forEach(blockEl => {
+        const blockId = blockEl.dataset.id;
+
+        // --- Reorder and Delete ---
+        const upBtn = blockEl.querySelector('.up-btn');
+        if (upBtn) upBtn.onclick = () => moveBlock(blockId, 'up');
+
+        const downBtn = blockEl.querySelector('.down-btn');
+        if (downBtn) downBtn.onclick = () => moveBlock(blockId, 'down');
+
+        const delBtn = blockEl.querySelector('.del-btn');
+        if (delBtn) delBtn.onclick = async () => {
+          if (!confirm('Delete this block?')) return;
+          await api('/api/config/' + blockId, { method: 'DELETE' });
+          loadBlocks();
+        };
+
+        // --- Edit, Cancel, Save ---
+        const editBtn = blockEl.querySelector('.edit-btn');
+        if (editBtn) editBtn.onclick = () => {
+          blockEl.classList.add('is-editing');
+        };
+
+        const cancelBtn = blockEl.querySelector('.cancel-btn');
+        if (cancelBtn) cancelBtn.onclick = () => {
+          blockEl.classList.remove('is-editing');
+          // Optional: reset form fields if user made changes then cancelled
+          renderBlocks();
+        };
+
+        const saveBtn = blockEl.querySelector('.save-btn');
+        if (saveBtn) saveBtn.onclick = async () => {
+          const newName = blockEl.querySelector('.edit-name').value;
+          const newRole = blockEl.querySelector('.edit-role').value;
+          const newContent = blockEl.querySelector('.edit-content').value;
+          try {
+            await api('/api/config/' + blockId, { method: 'PUT', body: { name: newName, role: newRole, content: newContent } });
+            blockEl.classList.remove('is-editing');
+            loadBlocks(); // Reload all to reflect changes
+          } catch (err) {
+            alert('Failed to save: ' + JSON.stringify(err));
+          }
+        };
+      });
+    }
+
+    async function moveBlock(blockId, direction) {
+      const id = Number(blockId);
+      const order = allBlocks.map(b => b.id);
+      const idx = order.indexOf(id);
+
+      if (direction === 'up' && idx > 0) {
+        [order[idx-1], order[idx]] = [order[idx], order[idx-1]];
+      } else if (direction === 'down' && idx < order.length - 1) {
+        [order[idx], order[idx+1]] = [order[idx+1], order[idx]];
+      } else {
+        return; // Can't move
+      }
+
+      await api('/api/config/reorder', { method: 'POST', body: { order } });
+      loadBlocks();
     }
 
     async function loadBlocks() {
       try {
-        const data = await api('/api/config');
-        const blocks = data.blocks || [];
-        const html = blocks.map((b, i) => `
-          <div class="block-item ${b.immutable ? 'immutable' : ''}">
-            <div class="block-header">
-              <strong>${escapeHtml(b.name)}</strong> (${b.role}) ${b.immutable ? '— Cannot edit' : ''}
-            </div>
-            <div class="block-content">
-              ${b.immutable ? 
-                `<div class="readonly">${escapeHtml(b.content)}</div>` :
-                `<textarea data-id="${b.id}" data-field="content" class="block-textarea">${escapeHtml(b.content)}</textarea>`
-              }
-            </div>
-            ${!b.immutable ? `
-              <div class="block-actions">
-                <input data-id="${b.id}" data-field="name" value="${escapeHtml(b.name)}" placeholder="Block name" />
-                <select data-id="${b.id}" data-field="role">
-                  <option value="system" ${b.role === 'system' ? 'selected' : ''}>system</option>
-                  <option value="user" ${b.role === 'user' ? 'selected' : ''}>user</option>
-                  <option value="assistant" ${b.role === 'assistant' ? 'selected' : ''}>assistant</option>
-                </select>
-                <button onclick="updateBlock(${b.id})">Update</button>
-                <button onclick="deleteBlock(${b.id})" class="delete-btn">Delete</button>
-              </div>
-            ` : ''}
-          </div>
-        `).join('');
-        $('blocksList').innerHTML = html || '<i>No blocks</i>';
+        const j = await api('/api/config');
+        allBlocks = j.blocks; // Store for later use
+        renderBlocks();
       } catch (err) {
         console.error(err);
         $('blocksList').innerHTML = `<pre>${JSON.stringify(err, null, 2)}</pre>`;
       }
-    }
-
-    async function updateBlock(id) {
-      const name = document.querySelector(`input[data-id="${id}"][data-field="name"]`).value;
-      const role = document.querySelector(`select[data-id="${id}"][data-field="role"]`).value;
-      const content = document.querySelector(`textarea[data-id="${id}"][data-field="content"]`).value;
-      try {
-        await api(`/api/config/${id}`, { method: 'PUT', body: { name, role, content } });
-        loadBlocks();
-      } catch (err) { alert(JSON.stringify(err)); }
-    }
-
-    async function deleteBlock(id) {
-      if (!confirm('Delete this block?')) return;
-      try {
-        await api(`/api/config/${id}`, { method: 'DELETE' });
-        loadBlocks();
-      } catch (err) { alert(JSON.stringify(err)); }
     }
 
     window.onload = () => {
@@ -113,10 +250,15 @@
         const name = $('new_name').value;
         const role = $('new_role').value;
         const content = $('new_content').value;
+        if (!name) {
+          alert('Block name is required.');
+          return;
+        }
         try {
           await api('/api/config', { method: 'POST', body: { name, role, content } });
           $('new_name').value = '';
           $('new_content').value = '';
+          $('new_role').value = 'system';
           loadBlocks();
         } catch (err) { alert(JSON.stringify(err)); }
       };

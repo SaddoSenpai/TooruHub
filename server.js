@@ -8,7 +8,6 @@ const axios = require('axios');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const { open } = require('sqlite');
-const session = require('express-session');
 
 const PORT = process.env.PORT || 3000;
 const SALT_ROUNDS = 10;
@@ -16,12 +15,6 @@ const SALT_ROUNDS = 10;
 const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: '10mb' }));
-app.use(session({
-  secret: process.env.SESSION_SECRET || 'your-secret-key-change-in-production',
-  resave: false,
-  saveUninitialized: false,
-  cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 } // 24 hours
-}));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Database init (SQLite) ---
@@ -90,23 +83,6 @@ function requireAuth(req, res, next) {
   });
 }
 
-function requireSession(req, res, next) {
-  if (!req.session.userId) {
-    return res.redirect('/');
-  }
-  findUserByToken(req.session.proxyToken).then(user => {
-    if (!user) {
-      req.session.destroy();
-      return res.redirect('/');
-    }
-    req.user = user;
-    next();
-  }).catch(err => {
-    console.error(err);
-    res.status(500).send('Database error');
-  });
-}
-
 // Default Gemini safety settings (from your inspiration file)
 const DEFAULT_GEMINI_SAFETY_SETTINGS = [
   { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -127,15 +103,12 @@ app.post('/signup', async (req, res) => {
     const result = await db.run('INSERT INTO users (username, password_hash, proxy_token) VALUES (?, ?, ?)', username, hash, token);
     const userId = result.lastID;
 
-    // Create default immutable JanitorAI block at position 0
+    // REQUIREMENT 1: The "JanitorAI Default" block is created here for every new user.
+    // It is marked as 'immutable' so its content cannot be changed, but its position can be.
     await db.run(
       `INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable) VALUES (?, ?, ?, ?, ?, ?)`,
       userId, 'JanitorAI Default (Cannot change)', 'user', '<<EXTERNAL_INPUT_PLACEHOLDER>>', 0, 1
     );
-
-    // Set session
-    req.session.userId = userId;
-    req.session.proxyToken = token;
 
     res.json({ username, proxy_token: token });
   } catch (err) {
@@ -152,11 +125,6 @@ app.post('/login', async (req, res) => {
     if (!user) return res.status(401).json({ error: 'invalid credentials' });
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: 'invalid credentials' });
-    
-    // Set session
-    req.session.userId = user.id;
-    req.session.proxyToken = user.proxy_token;
-    
     res.json({ username: user.username, proxy_token: user.proxy_token });
   } catch (err) {
     console.error(err);
@@ -168,15 +136,6 @@ app.post('/regenerate-token', requireAuth, async (req, res) => {
   const newToken = genToken();
   await db.run('UPDATE users SET proxy_token = ? WHERE id = ?', newToken, req.user.id);
   res.json({ proxy_token: newToken });
-});
-
-app.post('/logout', (req, res) => {
-  req.session.destroy((err) => {
-    if (err) {
-      return res.status(500).json({ error: 'Could not log out' });
-    }
-    res.json({ ok: true });
-  });
 });
 
 // --- Keys management ---
@@ -212,14 +171,14 @@ app.delete('/keys/:id', requireAuth, async (req, res) => {
 });
 
 // --- Prompt blocks (config) endpoints ---
-// Get prompt blocks ordered (API endpoint for AJAX calls)
-app.get('/api/config', requireSession, async (req, res) => {
+// Get prompt blocks ordered
+app.get('/api/config', requireAuth, async (req, res) => {
   const rows = await db.all('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
   res.json({ blocks: rows });
 });
 
 // Add a block (appends to end). role: 'system'|'user'|'assistant'
-app.post('/api/config', requireSession, async (req, res) => {
+app.post('/api/config', requireAuth, async (req, res) => {
   const { name, role, content } = req.body || {};
   if (!name || !role) return res.status(400).json({ error: 'name and role required' });
 
@@ -233,7 +192,7 @@ app.post('/api/config', requireSession, async (req, res) => {
 });
 
 // Update a block (cannot update immutable)
-app.put('/api/config/:id', requireSession, async (req, res) => {
+app.put('/api/config/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
   const { name, role, content } = req.body || {};
   const row = await db.get('SELECT * FROM prompt_blocks WHERE id = ? AND user_id = ?', id, req.user.id);
@@ -245,7 +204,7 @@ app.put('/api/config/:id', requireSession, async (req, res) => {
 });
 
 // Delete a block (cannot delete immutable)
-app.delete('/api/config/:id', requireSession, async (req, res) => {
+app.delete('/api/config/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
   const row = await db.get('SELECT * FROM prompt_blocks WHERE id = ? AND user_id = ?', id, req.user.id);
   if (!row) return res.status(404).json({ error: 'not found' });
@@ -261,7 +220,9 @@ app.delete('/api/config/:id', requireSession, async (req, res) => {
 });
 
 // Reorder endpoint: body { order: [id1, id2, ...] }
-app.post('/api/config/reorder', requireSession, async (req, res) => {
+// REQUIREMENT 2: This endpoint updates the `position` of all blocks based on the order sent from the frontend.
+// It does not check for `immutable`, so it will reorder the default block just like any other.
+app.post('/api/config/reorder', requireAuth, async (req, res) => {
   const { order } = req.body || {};
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order array required' });
   // ensure all ids belong to user
@@ -281,37 +242,27 @@ async function getUserKeyForProvider(userId, provider) {
 }
 
 // Build final messages using prompt blocks
-// If bypassPromptStructure === true -> return body.messages (raw)
-// Otherwise: assemble blocks in position order. When encountering the immutable placeholder block
-// (JanitorAI Default), we inject the incoming body.messages (if present) or {role:'user', content: body.input}.
+// REQUIREMENT 3: This function builds the final prompt.
+// It fetches blocks using `ORDER BY position`, so it respects the user's chosen order.
 async function buildFinalMessages(userId, incomingBody) {
   if (incomingBody && incomingBody.bypass_prompt_structure) {
-    // Return raw messages if provided (fall back to empty array)
     return incomingBody.messages || [];
   }
 
   const blocks = await db.all('SELECT * FROM prompt_blocks WHERE user_id = ? ORDER BY position', userId);
-  // if no blocks, fallback to incoming messages
   if (!blocks || blocks.length === 0) return incomingBody.messages || [];
 
   const final = [];
   for (const b of blocks) {
+    // When it finds the immutable block (wherever it is), it injects the external messages.
     if (b.immutable) {
-      // Inject external input at this position
       if (Array.isArray(incomingBody.messages) && incomingBody.messages.length > 0) {
-        // append all incoming messages in order
         for (const m of incomingBody.messages) final.push({ role: m.role || 'user', content: m.content || '' });
       } else if (typeof incomingBody.input === 'string') {
         final.push({ role: 'user', content: incomingBody.input });
-      } else {
-        // If the placeholder block itself has content other than the placeholder, include it
-        if (b.content && b.content !== '<<EXTERNAL_INPUT_PLACEHOLDER>>') {
-          final.push({ role: b.role || 'user', content: b.content || '' });
-        } else {
-          // nothing to inject; skip
-        }
       }
     } else {
+      // For all other blocks, it just adds their content.
       final.push({ role: b.role || 'user', content: b.content || '' });
     }
   }
@@ -343,7 +294,6 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
 
     // === GEMINI handling ===
     if (provider === 'gemini') {
-      // Build Gemini-specific request from mergedMessages
       let systemInstructionText = '';
       const contents = [];
 
@@ -352,46 +302,29 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
         if (role === 'system') {
           systemInstructionText += (systemInstructionText ? '\n' : '') + (m.content || '');
         } else if (role === 'assistant') {
-          // assistant -> model
           contents.push({ role: 'model', parts: [{ text: m.content || '' }] });
         } else {
           contents.push({ role: 'user', parts: [{ text: m.content || '' }] });
         }
       });
 
-      // safety settings
       const safetySettings = Array.isArray(body.safety_settings) ? body.safety_settings : DEFAULT_GEMINI_SAFETY_SETTINGS;
-
       const generation_config = {
         temperature: body.temperature ?? 0.2,
         top_k: body.top_k ?? undefined,
         top_p: body.top_p ?? 0.95
       };
-
-      const geminiRequestBody = {
-        contents,
-        generation_config,
-        safety_settings: safetySettings
-      };
+      const geminiRequestBody = { contents, generation_config, safety_settings: safetySettings };
       if (systemInstructionText) geminiRequestBody.system_instruction = { parts: [{ text: systemInstructionText }] };
 
-      // STREAMING
       if (body.stream) {
         const endpoint = 'streamGenerateContent';
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:${endpoint}?key=${encodeURIComponent(apiKey)}`;
-
-        const providerResp = await axios.post(url, geminiRequestBody, {
-          headers: { 'Content-Type': 'application/json' },
-          responseType: 'stream',
-          timeout: 120000
-        });
-
-        // SSE headers
+        const providerResp = await axios.post(url, geminiRequestBody, { headers: { 'Content-Type': 'application/json' }, responseType: 'stream', timeout: 120000 });
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders && res.flushHeaders();
-
         providerResp.data.on('data', (chunk) => {
           const str = chunk.toString();
           const lines = str.split('\n').map(l => l.trim()).filter(Boolean);
@@ -400,82 +333,40 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
               const parsed = JSON.parse(line);
               const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
               if (text) {
-                const formatted = {
-                  id: `chatcmpl-${Date.now()}`,
-                  object: "chat.completion.chunk",
-                  created: Math.floor(Date.now() / 1000),
-                  model,
-                  choices: [{ delta: { content: text }, index: 0, finish_reason: null }]
-                };
+                const formatted = { id: `chatcmpl-${Date.now()}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model, choices: [{ delta: { content: text }, index: 0, finish_reason: null }] };
                 res.write(`data: ${JSON.stringify(formatted)}\n\n`);
               }
             } catch (e) { /* ignore non-json fragments */ }
           }
         });
-
-        providerResp.data.on('end', () => {
-          res.write('data: [DONE]\n\n');
-          res.end();
-        });
-
-        providerResp.data.on('error', (err) => {
-          console.error('Gemini stream error', err);
-          try { res.write('data: [DONE]\n\n'); res.end(); } catch (e) {}
-        });
-
+        providerResp.data.on('end', () => { res.write('data: [DONE]\n\n'); res.end(); });
+        providerResp.data.on('error', (err) => { console.error('Gemini stream error', err); try { res.write('data: [DONE]\n\n'); res.end(); } catch (e) {} });
         return;
       }
 
-      // NON-STREAMING
       const endpoint = 'generateContent';
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:${endpoint}?key=${encodeURIComponent(apiKey)}`;
-
-      const providerResp = await axios.post(url, geminiRequestBody, {
-        headers: { 'Content-Type': 'application/json' },
-        timeout: 120000
-      });
-
+      const providerResp = await axios.post(url, geminiRequestBody, { headers: { 'Content-Type': 'application/json' }, timeout: 120000 });
       const candidateText = providerResp.data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-      return res.json({
-        id: `proxy-${Date.now()}`,
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model,
-        choices: [{ message: { role: 'assistant', content: candidateText }, finish_reason: 'stop' }],
-        raw: providerResp.data
-      });
+      return res.json({ id: `proxy-${Date.now()}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model, choices: [{ message: { role: 'assistant', content: candidateText }, finish_reason: 'stop' }], raw: providerResp.data });
     }
 
     // === OPENROUTER / OPENAI handling ===
     if (provider === 'openrouter' || provider === 'openai') {
-      // Convert mergedMessages into body.messages for OpenAI/OpenRouter if not bypassing
       const forwardBody = { ...body };
       if (!body.bypass_prompt_structure) {
         forwardBody.messages = mergedMessages;
       }
-
-      const forwardUrl = provider === 'openrouter'
-        ? 'https://openrouter.ai/api/v1/chat/completions'
-        : 'https://api.openai.com/v1/chat/completions';
-
+      const forwardUrl = provider === 'openrouter' ? 'https://openrouter.ai/api/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
       if (forwardBody.stream) {
-        const resp = await axios.post(forwardUrl, forwardBody, {
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-          responseType: 'stream',
-          timeout: 120000
-        });
-
+        const resp = await axios.post(forwardUrl, forwardBody, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, responseType: 'stream', timeout: 120000 });
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
         resp.data.pipe(res);
         return;
       }
-
-      const providerResp = await axios.post(forwardUrl, forwardBody, {
-        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-        timeout: 120000
-      });
+      const providerResp = await axios.post(forwardUrl, forwardBody, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, timeout: 120000 });
       return res.status(providerResp.status).json(providerResp.data);
     }
 
@@ -491,8 +382,7 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// serve config page with session auth
-app.get('/config', requireSession, (req, res) => {
+app.get('/config', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'config.html'));
 });
 

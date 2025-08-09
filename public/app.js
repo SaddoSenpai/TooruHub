@@ -99,12 +99,7 @@ window.onload = () => {
     window.location.href = '/config';
   };
 
-  $('btnLogout').onclick = async () => {
-    try {
-      await fetch('/logout', { method: 'POST' });
-    } catch (err) {
-      console.error('Logout error:', err);
-    }
+  $('btnLogout').onclick = () => {
     proxyToken = null;
     localStorage.removeItem('proxy_token');
     location.reload();
