@@ -6,7 +6,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="/style.css" />
   <style>
-    /* --- New Styles for the Revamped Config UI --- */
+    /* --- Styles for the Revamped Config UI --- */
     .block-item, .add-block-form {
       background-color: #f9f9f9;
       border: 1px solid #ddd;
@@ -86,7 +86,9 @@
 <body>
   <main class="container">
     <h1>Prompt Structure — Config</h1>
-    <p>Arrange and edit your prompt blocks below. The <strong>JanitorAI Default (Cannot change)</strong> block is immutable and acts as the placeholder for external inputs.</p>
+    <p>
+      Arrange and edit your prompt blocks. The immutable blocks (<strong>Character Info</strong>, <strong>User Persona</strong>, and <strong>Chat History</strong>) are special placeholders where parsed content from external apps will be injected. You can use <code>{{char}}</code> in your custom blocks to dynamically insert the character's name.
+    </p>
 
     <div id="blocksList">Loading...</div>
 
@@ -101,7 +103,7 @@
           <option value="assistant">assistant</option>
         </select>
       </div>
-      <textarea id="new_content" placeholder="Block content (string)"></textarea>
+      <textarea id="new_content" placeholder="Block content (string). Use {{char}} for the character's name."></textarea>
       <div class="edit-form-actions">
         <button id="btnAddBlock">Add block</button>
       </div>
@@ -118,7 +120,6 @@
       location.href = '/';
     }
 
-    // Store blocks data globally to access full content for editing
     let allBlocks = [];
 
     async function api(path, opts = {}) {
@@ -131,12 +132,17 @@
     }
 
     function renderBlocks() {
-      const html = allBlocks.map(b => `
+      const html = allBlocks.map(b => {
+        // For immutable blocks, we show their purpose instead of the placeholder content.
+        const displayContent = b.immutable ? `(This block will be replaced by parsed content: ${b.name})` : (b.content || '');
+        const editorContent = b.immutable ? '' : (b.content || '');
+
+        return `
         <div class="block-item" id="block-${b.id}" data-id="${b.id}">
           <!-- View Mode -->
           <div class="block-header">
             <div class="block-title">
-              <strong>${b.name}</strong> <small>(${b.role}) ${b.immutable ? '<em>immutable</em>' : ''}</small>
+              <strong>${b.name}</strong> <small>(${b.role}) ${b.immutable ? '<em>immutable placeholder</em>' : ''}</small>
             </div>
             <div class="block-actions">
               <div class="reorder-btns">
@@ -157,14 +163,14 @@
                 <option value="assistant" ${b.role === 'assistant' ? 'selected' : ''}>assistant</option>
               </select>
             </div>
-            <textarea class="edit-content" placeholder="Block content">${b.content || ''}</textarea>
+            <textarea class="edit-content" placeholder="Block content">${editorContent}</textarea>
             <div class="edit-form-actions">
               <button class="cancel-btn">Cancel</button>
               <button class="save-btn">Save</button>
             </div>
           </div>
         </div>
-      `).join('');
+      `}).join('');
       $('blocksList').innerHTML = html || '<i>No blocks</i>';
       attachEventListeners();
     }
@@ -173,7 +179,6 @@
       document.querySelectorAll('.block-item').forEach(blockEl => {
         const blockId = blockEl.dataset.id;
 
-        // --- Reorder and Delete ---
         const upBtn = blockEl.querySelector('.up-btn');
         if (upBtn) upBtn.onclick = () => moveBlock(blockId, 'up');
 
@@ -187,7 +192,6 @@
           loadBlocks();
         };
 
-        // --- Edit, Cancel, Save ---
         const editBtn = blockEl.querySelector('.edit-btn');
         if (editBtn) editBtn.onclick = () => {
           blockEl.classList.add('is-editing');
@@ -196,7 +200,6 @@
         const cancelBtn = blockEl.querySelector('.cancel-btn');
         if (cancelBtn) cancelBtn.onclick = () => {
           blockEl.classList.remove('is-editing');
-          // Optional: reset form fields if user made changes then cancelled
           renderBlocks();
         };
 
@@ -208,7 +211,7 @@
           try {
             await api('/api/config/' + blockId, { method: 'PUT', body: { name: newName, role: newRole, content: newContent } });
             blockEl.classList.remove('is-editing');
-            loadBlocks(); // Reload all to reflect changes
+            loadBlocks();
           } catch (err) {
             alert('Failed to save: ' + JSON.stringify(err));
           }
@@ -226,17 +229,19 @@
       } else if (direction === 'down' && idx < order.length - 1) {
         [order[idx], order[idx+1]] = [order[idx+1], order[idx]];
       } else {
-        return; // Can't move
+        return;
       }
 
       await api('/api/config/reorder', { method: 'POST', body: { order } });
       loadBlocks();
     }
 
+
+
     async function loadBlocks() {
       try {
         const j = await api('/api/config');
-        allBlocks = j.blocks; // Store for later use
+        allBlocks = j.blocks;
         renderBlocks();
       } catch (err) {
         console.error(err);

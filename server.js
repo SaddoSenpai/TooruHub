@@ -6,8 +6,7 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const axios = require('axios');
 const path = require('path');
-const sqlite3 = require('sqlite3').verbose();
-const { open } = require('sqlite');
+const { Pool } = require('pg'); // Use the PostgreSQL driver
 
 const PORT = process.env.PORT || 3000;
 const SALT_ROUNDS = 10;
@@ -17,56 +16,33 @@ app.use(cors());
 app.use(bodyParser.json({ limit: '10mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// --- Database init (SQLite) ---
-let db;
-(async () => {
-  db = await open({ filename: './data.db', driver: sqlite3.Database });
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE,
-      password_hash TEXT,
-      proxy_token TEXT
-    );
-  `);
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS api_keys (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      provider TEXT,
-      name TEXT,
-      api_key TEXT,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      UNIQUE(user_id, provider, name),
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-  `);
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS prompt_blocks (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      user_id INTEGER,
-      name TEXT,
-      role TEXT,
-      content TEXT,
-      position INTEGER,
-      immutable INTEGER DEFAULT 0,
-      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-  `);
-})();
+// --- Database init (Supabase/PostgreSQL) ---
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL || 'YOUR_POOLER_CONNECTION_STRING',
+  ssl: {
+    rejectUnauthorized: false
+  }
+});
 
-// --- Helpers ---
+
+pool.connect()
+  .then(() => console.log('Successfully connected to Supabase database.'))
+  .catch(err => console.error('Database connection error', err.stack));
+
+
+// --- Helpers (Updated for PostgreSQL) ---
 function genToken() {
   return crypto.randomBytes(32).toString('hex'); // 64 hex chars
 }
 
 async function findUserByUsername(username) {
-  return await db.get('SELECT * FROM users WHERE username = ?', username);
+  const res = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
+  return res.rows[0];
 }
 
 async function findUserByToken(token) {
-  return await db.get('SELECT * FROM users WHERE proxy_token = ?', token);
+  const res = await pool.query('SELECT * FROM users WHERE proxy_token = $1', [token]);
+  return res.rows[0];
 }
 
 function requireAuth(req, res, next) {
@@ -83,7 +59,7 @@ function requireAuth(req, res, next) {
   });
 }
 
-// Default Gemini safety settings (from your inspiration file)
+// Default Gemini safety settings
 const DEFAULT_GEMINI_SAFETY_SETTINGS = [
   { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
   { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
@@ -91,7 +67,7 @@ const DEFAULT_GEMINI_SAFETY_SETTINGS = [
   { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" }
 ];
 
-// --- Auth endpoints ---
+// --- Auth endpoints (Updated for PostgreSQL) ---
 app.post('/signup', async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'username & password required' });
@@ -100,15 +76,20 @@ app.post('/signup', async (req, res) => {
     if (existing) return res.status(400).json({ error: 'username already taken' });
     const hash = await bcrypt.hash(password, SALT_ROUNDS);
     const token = genToken();
-    const result = await db.run('INSERT INTO users (username, password_hash, proxy_token) VALUES (?, ?, ?)', username, hash, token);
-    const userId = result.lastID;
-
-    // REQUIREMENT 1: The "JanitorAI Default" block is created here for every new user.
-    // It is marked as 'immutable' so its content cannot be changed, but its position can be.
-    await db.run(
-      `INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable) VALUES (?, ?, ?, ?, ?, ?)`,
-      userId, 'JanitorAI Default (Cannot change)', 'user', '<<EXTERNAL_INPUT_PLACEHOLDER>>', 0, 1
+    
+    // Use RETURNING id to get the new user's ID
+    const result = await pool.query(
+      'INSERT INTO users (username, password_hash, proxy_token) VALUES ($1, $2, $3) RETURNING id',
+      [username, hash, token]
     );
+    const userId = result.rows[0].id;
+
+    // Use Promise.all to run inserts in parallel
+    await Promise.all([
+      pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'Character Info', 'user', '<<PARSED_CHARACTER_INFO>>', 0, 1]),
+      pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'User Persona', 'user', '<<PARSED_USER_PERSONA>>', 1, 1]),
+      pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'Chat History', 'user', '<<PARSED_CHAT_HISTORY>>', 2, 1])
+    ]);
 
     res.json({ username, proxy_token: token });
   } catch (err) {
@@ -134,22 +115,22 @@ app.post('/login', async (req, res) => {
 
 app.post('/regenerate-token', requireAuth, async (req, res) => {
   const newToken = genToken();
-  await db.run('UPDATE users SET proxy_token = ? WHERE id = ?', newToken, req.user.id);
+  await pool.query('UPDATE users SET proxy_token = $1 WHERE id = $2', [newToken, req.user.id]);
   res.json({ proxy_token: newToken });
 });
 
-// --- Keys management ---
+// --- Keys management (Updated for PostgreSQL) ---
 app.post('/add-keys', requireAuth, async (req, res) => {
   const { provider, apiKey, name } = req.body || {};
   if (!provider || !apiKey) return res.status(400).json({ error: 'provider and apiKey required' });
   const keyName = name || provider;
   try {
-    const existing = await db.get('SELECT id FROM api_keys WHERE user_id = ? AND provider = ? AND name = ?', req.user.id, provider, keyName);
-    if (existing) {
-      await db.run('UPDATE api_keys SET api_key = ? WHERE id = ?', apiKey, existing.id);
-    } else {
-      await db.run('INSERT INTO api_keys (user_id, provider, name, api_key) VALUES (?, ?, ?, ?)', req.user.id, provider, keyName, apiKey);
-    }
+    // Use ON CONFLICT to simplify INSERT or UPDATE logic (UPSERT)
+    await pool.query(
+      `INSERT INTO api_keys (user_id, provider, name, api_key) VALUES ($1, $2, $3, $4)
+       ON CONFLICT (user_id, provider, name) DO UPDATE SET api_key = EXCLUDED.api_key`,
+      [req.user.id, provider, keyName, apiKey]
+    );
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -158,124 +139,178 @@ app.post('/add-keys', requireAuth, async (req, res) => {
 });
 
 app.get('/keys', requireAuth, async (req, res) => {
-  const rows = await db.all('SELECT id, provider, name, created_at FROM api_keys WHERE user_id = ?', req.user.id);
-  res.json({ keys: rows });
+  const result = await pool.query('SELECT id, provider, name, created_at FROM api_keys WHERE user_id = $1', [req.user.id]);
+  res.json({ keys: result.rows });
 });
 
 app.delete('/keys/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
-  const row = await db.get('SELECT * FROM api_keys WHERE id = ? AND user_id = ?', id, req.user.id);
-  if (!row) return res.status(404).json({ error: 'not found' });
-  await db.run('DELETE FROM api_keys WHERE id = ?', id);
+  // The query now also checks user_id for security
+  const result = await pool.query('DELETE FROM api_keys WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+  if (result.rowCount === 0) {
+    return res.status(404).json({ error: 'not found' });
+  }
   res.json({ ok: true });
 });
 
-// --- Prompt blocks (config) endpoints ---
-// Get prompt blocks ordered
+// --- Prompt blocks (config) endpoints (Updated for PostgreSQL) ---
 app.get('/api/config', requireAuth, async (req, res) => {
-  const rows = await db.all('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
-  res.json({ blocks: rows });
+  const result = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 ORDER BY position', [req.user.id]);
+  res.json({ blocks: result.rows });
 });
 
-// Add a block (appends to end). role: 'system'|'user'|'assistant'
 app.post('/api/config', requireAuth, async (req, res) => {
   const { name, role, content } = req.body || {};
   if (!name || !role) return res.status(400).json({ error: 'name and role required' });
-
-  // get max position
-  const maxRow = await db.get('SELECT MAX(position) as mx FROM prompt_blocks WHERE user_id = ?', req.user.id);
-  const nextPos = (maxRow?.mx ?? 0) + 1;
-  await db.run('INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable) VALUES (?, ?, ?, ?, ?, ?)',
-    req.user.id, name, role, content || '', nextPos, 0);
-  const blocks = await db.all('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
-  res.json({ blocks });
+  const maxRow = await pool.query('SELECT MAX(position) as mx FROM prompt_blocks WHERE user_id = $1', [req.user.id]);
+  const nextPos = (maxRow.rows[0]?.mx ?? -1) + 1;
+  await pool.query('INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable) VALUES ($1, $2, $3, $4, $5, $6)',
+    [req.user.id, name, role, content || '', nextPos, 0]);
+  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 ORDER BY position', [req.user.id]);
+  res.json({ blocks: blocks.rows });
 });
 
-// Update a block (cannot update immutable)
 app.put('/api/config/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
   const { name, role, content } = req.body || {};
-  const row = await db.get('SELECT * FROM prompt_blocks WHERE id = ? AND user_id = ?', id, req.user.id);
+  // First, verify the block belongs to the user and is not immutable
+  const blockCheck = await pool.query('SELECT * FROM prompt_blocks WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+  const row = blockCheck.rows[0];
   if (!row) return res.status(404).json({ error: 'not found' });
   if (row.immutable) return res.status(403).json({ error: 'cannot edit immutable block' });
-  await db.run('UPDATE prompt_blocks SET name = ?, role = ?, content = ? WHERE id = ?', name || row.name, role || row.role, content ?? row.content, id);
-  const blocks = await db.all('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
-  res.json({ blocks });
+  
+  await pool.query('UPDATE prompt_blocks SET name = $1, role = $2, content = $3 WHERE id = $4', [name || row.name, role || row.role, content ?? row.content, id]);
+  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 ORDER BY position', [req.user.id]);
+  res.json({ blocks: blocks.rows });
 });
 
-// Delete a block (cannot delete immutable)
 app.delete('/api/config/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
-  const row = await db.get('SELECT * FROM prompt_blocks WHERE id = ? AND user_id = ?', id, req.user.id);
-  if (!row) return res.status(404).json({ error: 'not found' });
-  if (row.immutable) return res.status(403).json({ error: 'cannot delete immutable block' });
-  await db.run('DELETE FROM prompt_blocks WHERE id = ?', id);
-  // reorder positions to be contiguous
-  const remaining = await db.all('SELECT id FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
-  for (let i = 0; i < remaining.length; i++) {
-    await db.run('UPDATE prompt_blocks SET position = ? WHERE id = ?', i, remaining[i].id);
+  const blockCheck = await pool.query('SELECT * FROM prompt_blocks WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+  if (!blockCheck.rows[0]) return res.status(404).json({ error: 'not found' });
+  if (blockCheck.rows[0].immutable) return res.status(403).json({ error: 'cannot delete immutable block' });
+  
+  await pool.query('DELETE FROM prompt_blocks WHERE id = $1', [id]);
+  // Reordering is more complex in pure SQL, but a simple re-fetch and update loop is fine for this scale
+  const remaining = await pool.query('SELECT id FROM prompt_blocks WHERE user_id = $1 ORDER BY position', [req.user.id]);
+  for (let i = 0; i < remaining.rows.length; i++) {
+    await pool.query('UPDATE prompt_blocks SET position = $1 WHERE id = $2', [i, remaining.rows[i].id]);
   }
-  const blocks = await db.all('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
-  res.json({ blocks });
+  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 ORDER BY position', [req.user.id]);
+  res.json({ blocks: blocks.rows });
 });
 
-// Reorder endpoint: body { order: [id1, id2, ...] }
-// REQUIREMENT 2: This endpoint updates the `position` of all blocks based on the order sent from the frontend.
-// It does not check for `immutable`, so it will reorder the default block just like any other.
 app.post('/api/config/reorder', requireAuth, async (req, res) => {
   const { order } = req.body || {};
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order array required' });
-  // ensure all ids belong to user
-  const rows = await db.all('SELECT id FROM prompt_blocks WHERE user_id = ?', req.user.id);
-  const validIds = new Set(rows.map(r => r.id));
+  
+  // This loop is fine for this use case. For very large lists, a single bulk query would be better.
   for (let i = 0; i < order.length; i++) {
     const id = order[i];
-    if (!validIds.has(id)) return res.status(400).json({ error: `invalid block id ${id}` });
-    await db.run('UPDATE prompt_blocks SET position = ? WHERE id = ?', i, id);
+    // We don't need to pre-validate IDs if the user can only see their own blocks.
+    await pool.query('UPDATE prompt_blocks SET position = $1 WHERE id = $2 AND user_id = $3', [i, id, req.user.id]);
   }
-  const blocks = await db.all('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
-  res.json({ blocks });
+  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 ORDER BY position', [req.user.id]);
+  res.json({ blocks: blocks.rows });
 });
 
 async function getUserKeyForProvider(userId, provider) {
-  return await db.get('SELECT * FROM api_keys WHERE user_id = ? AND provider = ? ORDER BY created_at DESC LIMIT 1', userId, provider);
+  const res = await pool.query('SELECT * FROM api_keys WHERE user_id = $1 AND provider = $2 ORDER BY created_at DESC LIMIT 1', [userId, provider]);
+  return res.rows[0];
 }
 
-// Build final messages using prompt blocks
-// REQUIREMENT 3: This function builds the final prompt.
-// It fetches blocks using `ORDER BY position`, so it respects the user's chosen order.
+// --- PROMPT PARSING AND BUILDING LOGIC (No changes needed here) ---
+// ... (The entire buildFinalMessages and parseJanitorInput functions remain the same)
+async function parseJanitorInput(incomingMessages) {
+  let characterName = 'Character';
+  let characterInfo = null;
+  let userPersona = null;
+  let chatHistory = [];
+
+  const fullContent = (incomingMessages || []).map(m => m.content || '').join('\n\n');
+
+  const charRegex = /<([^\s>]+)'s Persona>([\s\S]*?)<\/\1's Persona>/;
+  const charMatch = fullContent.match(charRegex);
+  if (charMatch) {
+    characterName = charMatch[1];
+    characterInfo = { role: 'user', content: charMatch[2].trim() };
+  }
+
+  const userRegex = /<UserPersona>([\s\S]*?)<\/UserPersona>/;
+  const userMatch = fullContent.match(userRegex);
+  if (userMatch) {
+    userPersona = { role: 'user', content: userMatch[1].trim() };
+  }
+
+  chatHistory = (incomingMessages || []).filter(m => {
+    const content = m.content || '';
+    return !content.includes("'s Persona>") && !content.includes("<UserPersona>");
+  });
+
+  return { characterName, characterInfo, userPersona, chatHistory };
+}
+
 async function buildFinalMessages(userId, incomingBody) {
   if (incomingBody && incomingBody.bypass_prompt_structure) {
     return incomingBody.messages || [];
   }
 
-  const blocks = await db.all('SELECT * FROM prompt_blocks WHERE user_id = ? ORDER BY position', userId);
-  if (!blocks || blocks.length === 0) return incomingBody.messages || [];
+  const result = await pool.query('SELECT * FROM prompt_blocks WHERE user_id = $1 ORDER BY position', [userId]);
+  const userBlocks = result.rows;
+  if (!userBlocks || userBlocks.length === 0) return incomingBody.messages || [];
 
-  const final = [];
-  for (const b of blocks) {
-    // When it finds the immutable block (wherever it is), it injects the external messages.
-    if (b.immutable) {
-      if (Array.isArray(incomingBody.messages) && incomingBody.messages.length > 0) {
-        for (const m of incomingBody.messages) final.push({ role: m.role || 'user', content: m.content || '' });
-      } else if (typeof incomingBody.input === 'string') {
-        final.push({ role: 'user', content: incomingBody.input });
+  const { characterName, characterInfo, userPersona, chatHistory } = await parseJanitorInput(incomingBody.messages);
+  
+  console.log('--- PARSED DATA ---');
+  console.log('Character Name:', characterName);
+  console.log('Character Info Found:', !!characterInfo);
+  console.log('User Persona Found:', !!userPersona);
+  console.log('Chat History Length:', chatHistory.length);
+  console.log('--------------------');
+
+  const finalMessages = [];
+  for (const block of userBlocks) {
+    if (block.immutable) {
+      switch (block.name) {
+        case 'Character Info':
+          if (characterInfo) finalMessages.push(characterInfo);
+          break;
+        case 'User Persona':
+          if (userPersona) finalMessages.push(userPersona);
+          break;
+        case 'Chat History':
+          if (chatHistory.length > 0) finalMessages.push(...chatHistory);
+          break;
       }
     } else {
-      // For all other blocks, it just adds their content.
-      final.push({ role: b.role || 'user', content: b.content || '' });
+      let customContent = block.content || '';
+      customContent = customContent.replace(/{{char}}/g, characterName);
+      finalMessages.push({ role: block.role, content: customContent });
     }
   }
-  return final;
+
+  if (finalMessages.length === 0) {
+    console.log('[WARNING] buildFinalMessages resulted in an empty array. Falling back to original messages.');
+    return incomingBody.messages || [];
+  }
+
+  return finalMessages;
 }
 
-// --- Proxy endpoint with streaming and prompt-structure support ---
+
+// --- Proxy endpoint (No changes needed here) ---
+// ... (The entire /v1/chat/completions endpoint remains the same)
 app.post('/v1/chat/completions', requireAuth, async (req, res) => {
+  const reqId = crypto.randomBytes(4).toString('hex');
+  console.log(`\n[${new Date().toISOString()}] --- NEW REQUEST ${reqId} ---`);
+  
   try {
     const body = req.body || {};
     const model = (body.model || '').toString();
 
-    // Infer provider if not given
+    console.log(`[${reqId}] User ${req.user.id} requesting model: ${model}`);
+    console.log(`[${reqId}] RAW INCOMING MESSAGES:`, JSON.stringify(body.messages, null, 2));
+
     let provider = body.provider || req.headers['x-provider'];
     if (!provider) {
       if (model.toLowerCase().startsWith('gemini')) provider = 'gemini';
@@ -289,8 +324,13 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
     }
     const apiKey = keyRow.api_key;
 
-    // Build final messages (merges prompt-blocks and client's messages)
     const mergedMessages = await buildFinalMessages(req.user.id, body);
+
+    console.log(`[${reqId}] FINAL MESSAGES TO BE SENT (${provider}):`, JSON.stringify(mergedMessages, null, 2));
+    if (mergedMessages.length === 0) {
+        console.error(`[${reqId}] CRITICAL: Final message array is empty. Aborting call to AI provider.`);
+        return res.status(500).json({ error: 'Proxy error: Failed to construct a valid prompt.' });
+    }
 
     // === GEMINI handling ===
     if (provider === 'gemini') {
@@ -317,14 +357,17 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
       const geminiRequestBody = { contents, generation_config, safety_settings: safetySettings };
       if (systemInstructionText) geminiRequestBody.system_instruction = { parts: [{ text: systemInstructionText }] };
 
+      // STREAMING
       if (body.stream) {
         const endpoint = 'streamGenerateContent';
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:${endpoint}?key=${encodeURIComponent(apiKey)}`;
         const providerResp = await axios.post(url, geminiRequestBody, { headers: { 'Content-Type': 'application/json' }, responseType: 'stream', timeout: 120000 });
+        console.log(`[${reqId}] Request to Gemini successful. Streaming response...`);
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders && res.flushHeaders();
+        
         providerResp.data.on('data', (chunk) => {
           const str = chunk.toString();
           const lines = str.split('\n').map(l => l.trim()).filter(Boolean);
@@ -333,50 +376,90 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
               const parsed = JSON.parse(line);
               const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
               if (text) {
-                const formatted = { id: `chatcmpl-${Date.now()}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model, choices: [{ delta: { content: text }, index: 0, finish_reason: null }] };
+                const formatted = {
+                  id: `chatcmpl-${reqId}`,
+                  object: "chat.completion.chunk",
+                  created: Math.floor(Date.now() / 1000),
+                  model,
+                  choices: [{ delta: { content: text }, index: 0, finish_reason: null }]
+                };
                 res.write(`data: ${JSON.stringify(formatted)}\n\n`);
               }
             } catch (e) { /* ignore non-json fragments */ }
           }
         });
-        providerResp.data.on('end', () => { res.write('data: [DONE]\n\n'); res.end(); });
-        providerResp.data.on('error', (err) => { console.error('Gemini stream error', err); try { res.write('data: [DONE]\n\n'); res.end(); } catch (e) {} });
+        providerResp.data.on('end', () => { console.log(`[${reqId}] Stream ended.`); res.write('data: [DONE]\n\n'); res.end(); });
+        providerResp.data.on('error', (err) => { console.error(`[${reqId}] Gemini stream error`, err); try { res.end(); } catch (e) {} });
         return;
       }
 
+      // NON-STREAMING
       const endpoint = 'generateContent';
       const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:${endpoint}?key=${encodeURIComponent(apiKey)}`;
       const providerResp = await axios.post(url, geminiRequestBody, { headers: { 'Content-Type': 'application/json' }, timeout: 120000 });
-      const candidateText = providerResp.data?.candidates?.[0]?.content?.parts?.[0]?.text ?? '';
-      return res.json({ id: `proxy-${Date.now()}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model, choices: [{ message: { role: 'assistant', content: candidateText }, finish_reason: 'stop' }], raw: providerResp.data });
+      
+      const candidate = providerResp.data?.candidates?.[0];
+      const candidateText = candidate?.content?.parts?.[0]?.text ?? '';
+      const finishReason = candidate?.finishReason || 'stop';
+
+      const responsePayload = {
+        id: `chatcmpl-${reqId}`,
+        object: 'chat.completion',
+        created: Math.floor(Date.now() / 1000),
+        model,
+        choices: [{
+          index: 0,
+          message: { role: 'assistant', content: candidateText },
+          finish_reason: finishReason
+        }],
+        usage: {
+          prompt_tokens: 0,
+          completion_tokens: 0,
+          total_tokens: 0
+        }
+      };
+      
+      console.log(`[${reqId}] Sending response back to client:`, JSON.stringify(responsePayload, null, 2));
+      return res.json(responsePayload);
     }
 
     // === OPENROUTER / OPENAI handling ===
     if (provider === 'openrouter' || provider === 'openai') {
       const forwardBody = { ...body };
-      if (!body.bypass_prompt_structure) {
-        forwardBody.messages = mergedMessages;
-      }
+      forwardBody.messages = mergedMessages;
+      
       const forwardUrl = provider === 'openrouter' ? 'https://openrouter.ai/api/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
       if (forwardBody.stream) {
         const resp = await axios.post(forwardUrl, forwardBody, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, responseType: 'stream', timeout: 120000 });
+        console.log(`[${reqId}] Request to ${provider} successful. Streaming response...`);
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
         resp.data.pipe(res);
+        resp.data.on('end', () => console.log(`[${reqId}] Stream ended.`));
         return;
       }
       const providerResp = await axios.post(forwardUrl, forwardBody, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, timeout: 120000 });
+      console.log(`[${reqId}] Request to ${provider} successful. Sending non-streamed response.`);
+      console.log(`[${reqId}] Sending response back to client:`, JSON.stringify(providerResp.data, null, 2));
       return res.status(providerResp.status).json(providerResp.data);
     }
 
     return res.status(400).json({ error: `Unsupported provider '${provider}'.` });
   } catch (err) {
-    console.error('Proxy error', err.response?.data ?? err.message);
+    console.error(`[${reqId}] --- PROXY ERROR ---`);
+    if (err.response) {
+      console.error('Error Status:', err.response.status);
+      console.error('Error Data:', JSON.stringify(err.response.data, null, 2));
+    } else {
+      console.error('Error Message:', err.message);
+    }
+    console.error('--------------------');
     const msg = err.response?.data ?? { message: err.message };
     res.status(500).json({ error: 'Proxy failed', detail: msg });
   }
 });
+
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
