@@ -1,4 +1,4 @@
-entrypoint = "index.js"
+entrypoint = "server.js"
 modules = ["nodejs-22"]
 hidden = [".config", "package-lock.json"]
 
@@ -9,6 +9,10 @@ requiredFiles = [".replit", "replit.nix", "package.json", "package-lock.json"]
 channel = "stable-24_11"
 
 [deployment]
-run = ["node", "index.js"]
+run = ["node", "server.js"]
 deploymentTarget = "autoscale"
 ignorePorts = false
+
+[[ports]]
+localPort = 3000
+externalPort = 80
