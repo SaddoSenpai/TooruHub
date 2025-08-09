@@ -8,6 +8,7 @@ const axios = require('axios');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const { open } = require('sqlite');
+const cookieParser = require('cookie-parser');
 
 const PORT = process.env.PORT || 3000;
 const SALT_ROUNDS = 10;
@@ -15,6 +16,7 @@ const SALT_ROUNDS = 10;
 const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: '10mb' }));
+app.use(cookieParser());
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Database init (SQLite) ---
@@ -83,6 +85,21 @@ function requireAuth(req, res, next) {
   });
 }
 
+function requireCookieAuth(req, res, next) {
+  const sessionToken = req.cookies.session_token;
+  if (!sessionToken) {
+    return res.redirect('/');
+  }
+  findUserByToken(sessionToken).then(user => {
+    if (!user) return res.redirect('/');
+    req.user = user;
+    next();
+  }).catch(err => {
+    console.error(err);
+    res.status(500).json({ error: 'DB error' });
+  });
+}
+
 // Default Gemini safety settings (from your inspiration file)
 const DEFAULT_GEMINI_SAFETY_SETTINGS = [
   { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -109,6 +126,13 @@ app.post('/signup', async (req, res) => {
       userId, 'JanitorAI Default (Cannot change)', 'user', '<<EXTERNAL_INPUT_PLACEHOLDER>>', 0, 1
     );
 
+    // Set session cookie
+    res.cookie('session_token', token, { 
+      httpOnly: true, 
+      secure: false, // set to true in production with HTTPS
+      maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+    });
+
     res.json({ username, proxy_token: token });
   } catch (err) {
     console.error(err);
@@ -124,6 +148,14 @@ app.post('/login', async (req, res) => {
     if (!user) return res.status(401).json({ error: 'invalid credentials' });
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: 'invalid credentials' });
+    
+    // Set session cookie
+    res.cookie('session_token', user.proxy_token, { 
+      httpOnly: true, 
+      secure: false, // set to true in production with HTTPS
+      maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+    });
+
     res.json({ username: user.username, proxy_token: user.proxy_token });
   } catch (err) {
     console.error(err);
@@ -171,13 +203,13 @@ app.delete('/keys/:id', requireAuth, async (req, res) => {
 
 // --- Prompt blocks (config) endpoints ---
 // Get prompt blocks ordered
-app.get('/config', requireAuth, async (req, res) => {
+app.get('/config', requireCookieAuth, async (req, res) => {
   const rows = await db.all('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
   res.json({ blocks: rows });
 });
 
 // Add a block (appends to end). role: 'system'|'user'|'assistant'
-app.post('/config', requireAuth, async (req, res) => {
+app.post('/config', requireCookieAuth, async (req, res) => {
   const { name, role, content } = req.body || {};
   if (!name || !role) return res.status(400).json({ error: 'name and role required' });
 
@@ -191,7 +223,7 @@ app.post('/config', requireAuth, async (req, res) => {
 });
 
 // Update a block (cannot update immutable)
-app.put('/config/:id', requireAuth, async (req, res) => {
+app.put('/config/:id', requireCookieAuth, async (req, res) => {
   const id = req.params.id;
   const { name, role, content } = req.body || {};
   const row = await db.get('SELECT * FROM prompt_blocks WHERE id = ? AND user_id = ?', id, req.user.id);
@@ -203,7 +235,7 @@ app.put('/config/:id', requireAuth, async (req, res) => {
 });
 
 // Delete a block (cannot delete immutable)
-app.delete('/config/:id', requireAuth, async (req, res) => {
+app.delete('/config/:id', requireCookieAuth, async (req, res) => {
   const id = req.params.id;
   const row = await db.get('SELECT * FROM prompt_blocks WHERE id = ? AND user_id = ?', id, req.user.id);
   if (!row) return res.status(404).json({ error: 'not found' });
@@ -219,7 +251,7 @@ app.delete('/config/:id', requireAuth, async (req, res) => {
 });
 
 // Reorder endpoint: body { order: [id1, id2, ...] }
-app.post('/config/reorder', requireAuth, async (req, res) => {
+app.post('/config/reorder', requireCookieAuth, async (req, res) => {
   const { order } = req.body || {};
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order array required' });
   // ensure all ids belong to user
@@ -450,7 +482,7 @@ app.get('/', (req, res) => {
 });
 
 // serve config page
-app.get('/config', (req, res) => {
+app.get('/config', requireCookieAuth, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'config.html'));
 });
 
