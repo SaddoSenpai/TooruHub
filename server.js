@@ -41,6 +41,19 @@ let db;
       FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
     );
   `);
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS prompt_blocks (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      user_id INTEGER,
+      name TEXT,
+      role TEXT,
+      content TEXT,
+      position INTEGER,
+      immutable INTEGER DEFAULT 0,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+  `);
 })();
 
 // --- Helpers ---
@@ -70,6 +83,14 @@ function requireAuth(req, res, next) {
   });
 }
 
+// Default Gemini safety settings (from your inspiration file)
+const DEFAULT_GEMINI_SAFETY_SETTINGS = [
+  { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
+  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+  { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
+  { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" }
+];
+
 // --- Auth endpoints ---
 app.post('/signup', async (req, res) => {
   const { username, password } = req.body || {};
@@ -79,7 +100,15 @@ app.post('/signup', async (req, res) => {
     if (existing) return res.status(400).json({ error: 'username already taken' });
     const hash = await bcrypt.hash(password, SALT_ROUNDS);
     const token = genToken();
-    await db.run('INSERT INTO users (username, password_hash, proxy_token) VALUES (?, ?, ?)', username, hash, token);
+    const result = await db.run('INSERT INTO users (username, password_hash, proxy_token) VALUES (?, ?, ?)', username, hash, token);
+    const userId = result.lastID;
+
+    // Create default immutable JanitorAI block at position 0
+    await db.run(
+      `INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable) VALUES (?, ?, ?, ?, ?, ?)`,
+      userId, 'JanitorAI Default (Cannot change)', 'user', '<<EXTERNAL_INPUT_PLACEHOLDER>>', 0, 1
+    );
+
     res.json({ username, proxy_token: token });
   } catch (err) {
     console.error(err);
@@ -102,7 +131,6 @@ app.post('/login', async (req, res) => {
   }
 });
 
-// Regenerate proxy token
 app.post('/regenerate-token', requireAuth, async (req, res) => {
   const newToken = genToken();
   await db.run('UPDATE users SET proxy_token = ? WHERE id = ?', newToken, req.user.id);
@@ -141,19 +169,114 @@ app.delete('/keys/:id', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+// --- Prompt blocks (config) endpoints ---
+// Get prompt blocks ordered
+app.get('/config', requireAuth, async (req, res) => {
+  const rows = await db.all('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
+  res.json({ blocks: rows });
+});
+
+// Add a block (appends to end). role: 'system'|'user'|'assistant'
+app.post('/config', requireAuth, async (req, res) => {
+  const { name, role, content } = req.body || {};
+  if (!name || !role) return res.status(400).json({ error: 'name and role required' });
+
+  // get max position
+  const maxRow = await db.get('SELECT MAX(position) as mx FROM prompt_blocks WHERE user_id = ?', req.user.id);
+  const nextPos = (maxRow?.mx ?? 0) + 1;
+  await db.run('INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable) VALUES (?, ?, ?, ?, ?, ?)',
+    req.user.id, name, role, content || '', nextPos, 0);
+  const blocks = await db.all('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
+  res.json({ blocks });
+});
+
+// Update a block (cannot update immutable)
+app.put('/config/:id', requireAuth, async (req, res) => {
+  const id = req.params.id;
+  const { name, role, content } = req.body || {};
+  const row = await db.get('SELECT * FROM prompt_blocks WHERE id = ? AND user_id = ?', id, req.user.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  if (row.immutable) return res.status(403).json({ error: 'cannot edit immutable block' });
+  await db.run('UPDATE prompt_blocks SET name = ?, role = ?, content = ? WHERE id = ?', name || row.name, role || row.role, content ?? row.content, id);
+  const blocks = await db.all('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
+  res.json({ blocks });
+});
+
+// Delete a block (cannot delete immutable)
+app.delete('/config/:id', requireAuth, async (req, res) => {
+  const id = req.params.id;
+  const row = await db.get('SELECT * FROM prompt_blocks WHERE id = ? AND user_id = ?', id, req.user.id);
+  if (!row) return res.status(404).json({ error: 'not found' });
+  if (row.immutable) return res.status(403).json({ error: 'cannot delete immutable block' });
+  await db.run('DELETE FROM prompt_blocks WHERE id = ?', id);
+  // reorder positions to be contiguous
+  const remaining = await db.all('SELECT id FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
+  for (let i = 0; i < remaining.length; i++) {
+    await db.run('UPDATE prompt_blocks SET position = ? WHERE id = ?', i, remaining[i].id);
+  }
+  const blocks = await db.all('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
+  res.json({ blocks });
+});
+
+// Reorder endpoint: body { order: [id1, id2, ...] }
+app.post('/config/reorder', requireAuth, async (req, res) => {
+  const { order } = req.body || {};
+  if (!Array.isArray(order)) return res.status(400).json({ error: 'order array required' });
+  // ensure all ids belong to user
+  const rows = await db.all('SELECT id FROM prompt_blocks WHERE user_id = ?', req.user.id);
+  const validIds = new Set(rows.map(r => r.id));
+  for (let i = 0; i < order.length; i++) {
+    const id = order[i];
+    if (!validIds.has(id)) return res.status(400).json({ error: `invalid block id ${id}` });
+    await db.run('UPDATE prompt_blocks SET position = ? WHERE id = ?', i, id);
+  }
+  const blocks = await db.all('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
+  res.json({ blocks });
+});
+
 async function getUserKeyForProvider(userId, provider) {
   return await db.get('SELECT * FROM api_keys WHERE user_id = ? AND provider = ? ORDER BY created_at DESC LIMIT 1', userId, provider);
 }
 
-// Default safety settings used for Gemini (same as in the inspiration file)
-const DEFAULT_GEMINI_SAFETY_SETTINGS = [
-  { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
-  { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "BLOCK_NONE" },
-  { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" }
-];
+// Build final messages using prompt blocks
+// If bypassPromptStructure === true -> return body.messages (raw)
+// Otherwise: assemble blocks in position order. When encountering the immutable placeholder block
+// (JanitorAI Default), we inject the incoming body.messages (if present) or {role:'user', content: body.input}.
+async function buildFinalMessages(userId, incomingBody) {
+  if (incomingBody && incomingBody.bypass_prompt_structure) {
+    // Return raw messages if provided (fall back to empty array)
+    return incomingBody.messages || [];
+  }
 
-// --- Proxy endpoint with streaming support ---
+  const blocks = await db.all('SELECT * FROM prompt_blocks WHERE user_id = ? ORDER BY position', userId);
+  // if no blocks, fallback to incoming messages
+  if (!blocks || blocks.length === 0) return incomingBody.messages || [];
+
+  const final = [];
+  for (const b of blocks) {
+    if (b.immutable) {
+      // Inject external input at this position
+      if (Array.isArray(incomingBody.messages) && incomingBody.messages.length > 0) {
+        // append all incoming messages in order
+        for (const m of incomingBody.messages) final.push({ role: m.role || 'user', content: m.content || '' });
+      } else if (typeof incomingBody.input === 'string') {
+        final.push({ role: 'user', content: incomingBody.input });
+      } else {
+        // If the placeholder block itself has content other than the placeholder, include it
+        if (b.content && b.content !== '<<EXTERNAL_INPUT_PLACEHOLDER>>') {
+          final.push({ role: b.role || 'user', content: b.content || '' });
+        } else {
+          // nothing to inject; skip
+        }
+      }
+    } else {
+      final.push({ role: b.role || 'user', content: b.content || '' });
+    }
+  }
+  return final;
+}
+
+// --- Proxy endpoint with streaming and prompt-structure support ---
 app.post('/v1/chat/completions', requireAuth, async (req, res) => {
   try {
     const body = req.body || {};
@@ -173,26 +296,28 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
     }
     const apiKey = keyRow.api_key;
 
+    // Build final messages (merges prompt-blocks and client's messages)
+    const mergedMessages = await buildFinalMessages(req.user.id, body);
+
     // === GEMINI handling ===
     if (provider === 'gemini') {
-      const messages = body.messages || [];
+      // Build Gemini-specific request from mergedMessages
       let systemInstructionText = '';
       const contents = [];
 
-      // Collect system instruction if present and turn other roles into gemini roles
-      messages.forEach(m => {
+      (mergedMessages || []).forEach(m => {
         const role = (m.role || 'user').toString();
         if (role === 'system') {
           systemInstructionText += (systemInstructionText ? '\n' : '') + (m.content || '');
         } else if (role === 'assistant') {
+          // assistant -> model
           contents.push({ role: 'model', parts: [{ text: m.content || '' }] });
         } else {
-          // anything else (user) -> 'user'
           contents.push({ role: 'user', parts: [{ text: m.content || '' }] });
         }
       });
 
-      // Allow overriding safety_settings from the incoming body
+      // safety settings
       const safetySettings = Array.isArray(body.safety_settings) ? body.safety_settings : DEFAULT_GEMINI_SAFETY_SETTINGS;
 
       const generation_config = {
@@ -201,20 +326,15 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
         top_p: body.top_p ?? 0.95
       };
 
-      // Build the request body using the snake_case keys Gemini expects
       const geminiRequestBody = {
         contents,
         generation_config,
         safety_settings: safetySettings
       };
-
-      if (systemInstructionText) {
-        geminiRequestBody.system_instruction = { parts: [{ text: systemInstructionText }] };
-      }
+      if (systemInstructionText) geminiRequestBody.system_instruction = { parts: [{ text: systemInstructionText }] };
 
       // STREAMING
       if (body.stream) {
-        // streaming endpoint
         const endpoint = 'streamGenerateContent';
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:${endpoint}?key=${encodeURIComponent(apiKey)}`;
 
@@ -224,17 +344,14 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
           timeout: 120000
         });
 
-        // Setup SSE headers
+        // SSE headers
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders && res.flushHeaders();
 
-        // Stream parser - read chunks and attempt to parse JSON objects; for each candidate chunk, emit SSE
         providerResp.data.on('data', (chunk) => {
           const str = chunk.toString();
-          // Gemini streaming often sends JSON objects separated by newlines or concatenated.
-          // Split on newlines and try to parse each non-empty line as JSON.
           const lines = str.split('\n').map(l => l.trim()).filter(Boolean);
           for (const line of lines) {
             try {
@@ -250,9 +367,7 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
                 };
                 res.write(`data: ${JSON.stringify(formatted)}\n\n`);
               }
-            } catch (e) {
-              // It's common to receive non-JSON fragments. Ignore parsing errors.
-            }
+            } catch (e) { /* ignore non-json fragments */ }
           }
         });
 
@@ -263,16 +378,10 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
 
         providerResp.data.on('error', (err) => {
           console.error('Gemini stream error', err);
-          // If headers not sent as SSE, send JSON error; otherwise close stream
-          try {
-            res.write('data: [DONE]\n\n');
-            res.end();
-          } catch (e) {
-            // no-op
-          }
+          try { res.write('data: [DONE]\n\n'); res.end(); } catch (e) {}
         });
 
-        return; // streaming handled
+        return;
       }
 
       // NON-STREAMING
@@ -297,13 +406,18 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
 
     // === OPENROUTER / OPENAI handling ===
     if (provider === 'openrouter' || provider === 'openai') {
+      // Convert mergedMessages into body.messages for OpenAI/OpenRouter if not bypassing
+      const forwardBody = { ...body };
+      if (!body.bypass_prompt_structure) {
+        forwardBody.messages = mergedMessages;
+      }
+
       const forwardUrl = provider === 'openrouter'
         ? 'https://openrouter.ai/api/v1/chat/completions'
         : 'https://api.openai.com/v1/chat/completions';
 
-      // If streaming requested, forward the stream and pipe it directly.
-      if (body.stream) {
-        const resp = await axios.post(forwardUrl, body, {
+      if (forwardBody.stream) {
+        const resp = await axios.post(forwardUrl, forwardBody, {
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
           responseType: 'stream',
           timeout: 120000
@@ -316,8 +430,7 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
         return;
       }
 
-      // Non-streaming forward
-      const providerResp = await axios.post(forwardUrl, body, {
+      const providerResp = await axios.post(forwardUrl, forwardBody, {
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
         timeout: 120000
       });
@@ -334,6 +447,11 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
 
 app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
+});
+
+// serve config page
+app.get('/config', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'config.html'));
 });
 
 app.listen(PORT, () => {

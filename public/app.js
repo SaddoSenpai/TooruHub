@@ -95,6 +95,10 @@ window.onload = () => {
     } catch (err) { alert('Failed: ' + JSON.stringify(err)); }
   };
 
+  $('btnManagePrompts').onclick = () => {
+    window.location.href = '/config';
+  };
+
   $('btnLogout').onclick = () => {
     proxyToken = null;
     localStorage.removeItem('proxy_token');

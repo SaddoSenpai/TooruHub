@@ -1,0 +1,121 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Prompt Structure — Config</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>Prompt Structure — Config</h1>
+    <p>Edit the prompt blocks below. The <strong>JanitorAI Default (Cannot change)</strong> block is immutable and acts as the placeholder for external inputs.</p>
+
+    <div id="blocksList">Loading...</div>
+
+    <hr />
+    <h3>Add new block</h3>
+    <input id="new_name" placeholder="Name (eg. 'Assistant Persona')" />
+    <select id="new_role">
+      <option value="system">system</option>
+      <option value="user">user</option>
+      <option value="assistant">assistant</option>
+    </select>
+    <textarea id="new_content" placeholder="Block content (string)"></textarea>
+    <button id="btnAddBlock">Add block</button>
+
+    <p><a href="/">Back to dashboard</a></p>
+  </main>
+
+  <script>
+    const $ = id => document.getElementById(id);
+    let proxyToken = localStorage.getItem('proxy_token') || null;
+    if (!proxyToken) {
+      alert('You must be logged in. Redirecting to home.');
+      location.href = '/';
+    }
+
+    async function api(path, opts = {}) {
+      const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + proxyToken };
+      const res = await fetch(path, { method: opts.method || 'GET', headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
+      const isJson = res.headers.get('content-type')?.includes('application/json');
+      const data = isJson ? await res.json() : await res.text();
+      if (!res.ok) throw data;
+      return data;
+    }
+
+    async function loadBlocks() {
+      try {
+        const j = await api('/config');
+        const html = j.blocks.map(b => `
+          <div class="key-item" id="block-${b.id}">
+            <div style="flex:1;">
+              <strong>${b.name}</strong> <small>(${b.role}) ${b.immutable ? '<em>immutable</em>' : ''}</small>
+              <div style="margin-top:6px;"><pre>${(b.content||'').substring(0,500)}</pre></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:6px;">
+              <button data-id="${b.id}" class="up-btn">↑</button>
+              <button data-id="${b.id}" class="down-btn">↓</button>
+              ${b.immutable ? '' : `<button data-id="${b.id}" class="edit-btn">Edit</button><button data-id="${b.id}" class="del-btn">Delete</button>`}
+            </div>
+          </div>
+        `).join('');
+        $('blocksList').innerHTML = html || '<i>No blocks</i>';
+
+        document.querySelectorAll('.del-btn').forEach(b => b.onclick = async (ev) => {
+          const id = ev.target.dataset.id;
+          if (!confirm('Delete this block?')) return;
+          await api('/config/' + id, { method: 'DELETE' });
+          loadBlocks();
+        });
+        document.querySelectorAll('.edit-btn').forEach(b => b.onclick = async (ev) => {
+          const id = ev.target.dataset.id;
+          const newName = prompt('New name?');
+          const newRole = prompt('New role (system|user|assistant)?');
+          const newContent = prompt('New content (string)?');
+          if (newName == null) return;
+          await api('/config/' + id, { method: 'PUT', body: { name: newName, role: newRole, content: newContent } });
+          loadBlocks();
+        });
+        document.querySelectorAll('.up-btn').forEach(btn => btn.onclick = async (ev) => {
+          const id = Number(ev.target.dataset.id);
+          const order = Array.from(document.querySelectorAll('#blocksList .key-item')).map(el => Number(el.id.replace('block-','')));
+          const idx = order.indexOf(id);
+          if (idx <= 0) return;
+          [order[idx-1], order[idx]] = [order[idx], order[idx-1]];
+          await api('/config/reorder', { method: 'POST', body: { order } });
+          loadBlocks();
+        });
+        document.querySelectorAll('.down-btn').forEach(btn => btn.onclick = async (ev) => {
+          const id = Number(ev.target.dataset.id);
+          const order = Array.from(document.querySelectorAll('#blocksList .key-item')).map(el => Number(el.id.replace('block-','')));
+          const idx = order.indexOf(id);
+          if (idx === -1 || idx >= order.length - 1) return;
+          [order[idx], order[idx+1]] = [order[idx+1], order[idx]];
+          await api('/config/reorder', { method: 'POST', body: { order } });
+          loadBlocks();
+        });
+
+      } catch (err) {
+        console.error(err);
+        $('blocksList').innerHTML = `<pre>${JSON.stringify(err, null, 2)}</pre>`;
+      }
+    }
+
+    window.onload = () => {
+      loadBlocks();
+      $('btnAddBlock').onclick = async () => {
+        const name = $('new_name').value;
+        const role = $('new_role').value;
+        const content = $('new_content').value;
+        try {
+          await api('/config', { method: 'POST', body: { name, role, content } });
+          $('new_name').value = '';
+          $('new_content').value = '';
+          loadBlocks();
+        } catch (err) { alert(JSON.stringify(err)); }
+      };
+    };
+  </script>
+</body>
+</html>
