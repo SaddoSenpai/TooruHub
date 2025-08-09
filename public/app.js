@@ -102,7 +102,6 @@ window.onload = () => {
   $('btnLogout').onclick = () => {
     proxyToken = null;
     localStorage.removeItem('proxy_token');
-    document.cookie = 'session_token=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
     location.reload();
   };
 };
