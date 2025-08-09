@@ -29,7 +29,10 @@
 
   <script>
     const $ = id => document.getElementById(id);
-    let proxyToken = localStorage.getItem('proxy_token') || null;
+    // Try to get token from URL params first, then fallback to localStorage
+    const urlParams = new URLSearchParams(window.location.search);
+    let proxyToken = urlParams.get('token') || localStorage.getItem('proxy_token') || null;
+    
     if (!proxyToken) {
       alert('You must be logged in. Redirecting to home.');
       location.href = '/';
