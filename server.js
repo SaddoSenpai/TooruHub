@@ -6,33 +6,36 @@ const bcrypt = require('bcrypt');
 const crypto = require('crypto');
 const axios = require('axios');
 const path = require('path');
-const { Pool } = require('pg'); // Use the PostgreSQL driver
+const { Pool } = require('pg');
+const fileUpload = require('express-fileupload');
 
 const PORT = process.env.PORT || 3000;
 const SALT_ROUNDS = 10;
 
 const app = express();
 app.use(cors());
-app.use(bodyParser.json({ limit: '10mb' }));
+// FIX: REMOVE the global JSON body parser. We will apply it selectively.
+// app.use(bodyParser.json({ limit: '10mb' })); 
+app.use(fileUpload());
 app.use(express.static(path.join(__dirname, 'public')));
+
+// FIX: Create a reusable jsonParser middleware instance.
+const jsonParser = bodyParser.json({ limit: '10mb' });
 
 // --- Database init (Supabase/PostgreSQL) ---
 const pool = new Pool({
-  connectionString: process.env.DATABASE_URL || 'YOUR_POOLER_CONNECTION_STRING',
-  ssl: {
-    rejectUnauthorized: false
-  }
+  connectionString: process.env.DATABASE_URL || 'YOUR_SUPABASE_CONNECTION_STRING',
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined
 });
-
 
 pool.connect()
   .then(() => console.log('Successfully connected to Supabase database.'))
   .catch(err => console.error('Database connection error', err.stack));
 
 
-// --- Helpers (Updated for PostgreSQL) ---
+// --- Helpers ---
 function genToken() {
-  return crypto.randomBytes(32).toString('hex'); // 64 hex chars
+  return crypto.randomBytes(32).toString('hex');
 }
 
 async function findUserByUsername(username) {
@@ -67,8 +70,9 @@ const DEFAULT_GEMINI_SAFETY_SETTINGS = [
   { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" }
 ];
 
-// --- Auth endpoints (Updated for PostgreSQL) ---
-app.post('/signup', async (req, res) => {
+// --- Auth endpoints ---
+// FIX: Add jsonParser to routes that expect a JSON body.
+app.post('/signup', jsonParser, async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'username & password required' });
   try {
@@ -77,19 +81,19 @@ app.post('/signup', async (req, res) => {
     const hash = await bcrypt.hash(password, SALT_ROUNDS);
     const token = genToken();
     
-    // Use RETURNING id to get the new user's ID
     const result = await pool.query(
       'INSERT INTO users (username, password_hash, proxy_token) VALUES ($1, $2, $3) RETURNING id',
       [username, hash, token]
     );
     const userId = result.rows[0].id;
 
-    // Use Promise.all to run inserts in parallel
-    await Promise.all([
-      pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'Character Info', 'user', '<<PARSED_CHARACTER_INFO>>', 0, 1]),
-      pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'User Persona', 'user', '<<PARSED_USER_PERSONA>>', 1, 1]),
-      pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'Chat History', 'user', '<<PARSED_CHAT_HISTORY>>', 2, 1])
-    ]);
+    for (let slot = 1; slot <= 3; slot++) {
+        await Promise.all([
+            pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable, config_slot) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [userId, 'Character Info', 'user', '<<PARSED_CHARACTER_INFO>>', 0, 1, slot]),
+            pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable, config_slot) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [userId, 'User Persona', 'user', '<<PARSED_USER_PERSONA>>', 1, 1, slot]),
+            pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable, config_slot) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [userId, 'Chat History', 'user', '<<PARSED_CHAT_HISTORY>>', 2, 1, slot])
+        ]);
+    }
 
     res.json({ username, proxy_token: token });
   } catch (err) {
@@ -98,7 +102,7 @@ app.post('/signup', async (req, res) => {
   }
 });
 
-app.post('/login', async (req, res) => {
+app.post('/login', jsonParser, async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'username & password required' });
   try {
@@ -119,13 +123,12 @@ app.post('/regenerate-token', requireAuth, async (req, res) => {
   res.json({ proxy_token: newToken });
 });
 
-// --- Keys management (Updated for PostgreSQL) ---
-app.post('/add-keys', requireAuth, async (req, res) => {
+// --- Keys management ---
+app.post('/add-keys', jsonParser, requireAuth, async (req, res) => {
   const { provider, apiKey, name } = req.body || {};
   if (!provider || !apiKey) return res.status(400).json({ error: 'provider and apiKey required' });
   const keyName = name || provider;
   try {
-    // Use ON CONFLICT to simplify INSERT or UPDATE logic (UPSERT)
     await pool.query(
       `INSERT INTO api_keys (user_id, provider, name, api_key) VALUES ($1, $2, $3, $4)
        ON CONFLICT (user_id, provider, name) DO UPDATE SET api_key = EXCLUDED.api_key`,
@@ -145,7 +148,6 @@ app.get('/keys', requireAuth, async (req, res) => {
 
 app.delete('/keys/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
-  // The query now also checks user_id for security
   const result = await pool.query('DELETE FROM api_keys WHERE id = $1 AND user_id = $2', [id, req.user.id]);
   if (result.rowCount === 0) {
     return res.status(404).json({ error: 'not found' });
@@ -153,64 +155,158 @@ app.delete('/keys/:id', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
-// --- Prompt blocks (config) endpoints (Updated for PostgreSQL) ---
+
+// --- Config Management Endpoints ---
+app.get('/api/configs/meta', requireAuth, async (req, res) => {
+    const result = await pool.query('SELECT config_name_1, config_name_2, config_name_3, active_config_slot FROM users WHERE id = $1', [req.user.id]);
+    res.json(result.rows[0]);
+});
+
+app.put('/api/configs/meta', jsonParser, requireAuth, async (req, res) => {
+    const { names } = req.body;
+    if (!Array.isArray(names) || names.length !== 3) {
+        return res.status(400).json({ error: 'Invalid names array' });
+    }
+    await pool.query('UPDATE users SET config_name_1 = $1, config_name_2 = $2, config_name_3 = $3 WHERE id = $4', [names[0], names[1], names[2], req.user.id]);
+    res.json({ ok: true });
+});
+
+app.get('/api/configs/active', requireAuth, async (req, res) => {
+    const result = await pool.query('SELECT active_config_slot FROM users WHERE id = $1', [req.user.id]);
+    res.json(result.rows[0]);
+});
+app.put('/api/configs/active', jsonParser, requireAuth, async (req, res) => {
+    const { slot } = req.body;
+    if (![1, 2, 3].includes(slot)) {
+        return res.status(400).json({ error: 'Invalid slot number' });
+    }
+    await pool.query('UPDATE users SET active_config_slot = $1 WHERE id = $2', [slot, req.user.id]);
+    res.json({ ok: true });
+});
+
+app.get('/api/configs/export', requireAuth, async (req, res) => {
+    const slot = parseInt(req.query.slot, 10);
+    if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
+
+    const userResult = await pool.query(`SELECT config_name_${slot} as name FROM users WHERE id = $1`, [req.user.id]);
+    const configName = userResult.rows[0]?.name || `Config ${slot}`;
+
+    const blocksResult = await pool.query('SELECT name, role, content, immutable FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
+    
+    const exportData = {
+        configName,
+        blocks: blocksResult.rows.map(b => ({ name: b.name, role: b.role, content: b.content, immutable: !!b.immutable }))
+    };
+
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename="${configName.replace(/ /g, '_')}.json"`);
+    res.send(JSON.stringify(exportData, null, 2));
+});
+
+// FIX: This route does NOT use jsonParser, allowing express-fileupload to work.
+app.post('/api/configs/import', requireAuth, async (req, res) => {
+    const slot = parseInt(req.query.slot, 10);
+    if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
+    if (!req.files || Object.keys(req.files).length === 0) {
+        return res.status(400).json({ error: 'No file uploaded.' });
+    }
+
+    const client = await pool.connect();
+    try {
+        const file = req.files.configFile;
+        const importData = JSON.parse(file.data.toString('utf8'));
+
+        if (!importData.configName || !Array.isArray(importData.blocks)) {
+            throw new Error('Invalid JSON format');
+        }
+
+        await client.query('BEGIN');
+
+        await client.query('DELETE FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2', [req.user.id, slot]);
+        await client.query(`UPDATE users SET config_name_${slot} = $1 WHERE id = $2`, [importData.configName, req.user.id]);
+
+        for (let i = 0; i < importData.blocks.length; i++) {
+            const block = importData.blocks[i];
+            await client.query(
+                'INSERT INTO prompt_blocks (user_id, config_slot, name, role, content, position, immutable) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+                [req.user.id, slot, block.name, block.role, block.content, i, block.immutable ? 1 : 0]
+            );
+        }
+
+        await client.query('COMMIT');
+        res.json({ ok: true, newName: importData.configName });
+
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error("Import error:", err);
+        res.status(500).json({ error: 'Failed to import config.', detail: err.message });
+    } finally {
+        client.release();
+    }
+});
+
+
+// --- Prompt blocks (config) endpoints ---
 app.get('/api/config', requireAuth, async (req, res) => {
-  const result = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 ORDER BY position', [req.user.id]);
+  const slot = parseInt(req.query.slot, 10) || 1;
+  if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
+  const result = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
   res.json({ blocks: result.rows });
 });
 
-app.post('/api/config', requireAuth, async (req, res) => {
+app.post('/api/config', jsonParser, requireAuth, async (req, res) => {
+  const slot = parseInt(req.query.slot, 10) || 1;
+  if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
   const { name, role, content } = req.body || {};
   if (!name || !role) return res.status(400).json({ error: 'name and role required' });
-  const maxRow = await pool.query('SELECT MAX(position) as mx FROM prompt_blocks WHERE user_id = $1', [req.user.id]);
+  const maxRow = await pool.query('SELECT MAX(position) as mx FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2', [req.user.id, slot]);
   const nextPos = (maxRow.rows[0]?.mx ?? -1) + 1;
-  await pool.query('INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable) VALUES ($1, $2, $3, $4, $5, $6)',
-    [req.user.id, name, role, content || '', nextPos, 0]);
-  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 ORDER BY position', [req.user.id]);
+  await pool.query('INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable, config_slot) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+    [req.user.id, name, role, content || '', nextPos, 0, slot]);
+  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
   res.json({ blocks: blocks.rows });
 });
 
-app.put('/api/config/:id', requireAuth, async (req, res) => {
+app.put('/api/config/:id', jsonParser, requireAuth, async (req, res) => {
   const id = req.params.id;
   const { name, role, content } = req.body || {};
-  // First, verify the block belongs to the user and is not immutable
   const blockCheck = await pool.query('SELECT * FROM prompt_blocks WHERE id = $1 AND user_id = $2', [id, req.user.id]);
   const row = blockCheck.rows[0];
   if (!row) return res.status(404).json({ error: 'not found' });
   if (row.immutable) return res.status(403).json({ error: 'cannot edit immutable block' });
   
   await pool.query('UPDATE prompt_blocks SET name = $1, role = $2, content = $3 WHERE id = $4', [name || row.name, role || row.role, content ?? row.content, id]);
-  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 ORDER BY position', [req.user.id]);
+  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, row.config_slot]);
   res.json({ blocks: blocks.rows });
 });
 
 app.delete('/api/config/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
   const blockCheck = await pool.query('SELECT * FROM prompt_blocks WHERE id = $1 AND user_id = $2', [id, req.user.id]);
-  if (!blockCheck.rows[0]) return res.status(404).json({ error: 'not found' });
-  if (blockCheck.rows[0].immutable) return res.status(403).json({ error: 'cannot delete immutable block' });
+  const row = blockCheck.rows[0];
+  if (!row) return res.status(404).json({ error: 'not found' });
+  if (row.immutable) return res.status(403).json({ error: 'cannot delete immutable block' });
   
   await pool.query('DELETE FROM prompt_blocks WHERE id = $1', [id]);
-  // Reordering is more complex in pure SQL, but a simple re-fetch and update loop is fine for this scale
-  const remaining = await pool.query('SELECT id FROM prompt_blocks WHERE user_id = $1 ORDER BY position', [req.user.id]);
+  const remaining = await pool.query('SELECT id FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, row.config_slot]);
   for (let i = 0; i < remaining.rows.length; i++) {
     await pool.query('UPDATE prompt_blocks SET position = $1 WHERE id = $2', [i, remaining.rows[i].id]);
   }
-  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 ORDER BY position', [req.user.id]);
+  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, row.config_slot]);
   res.json({ blocks: blocks.rows });
 });
 
-app.post('/api/config/reorder', requireAuth, async (req, res) => {
+app.post('/api/config/reorder', jsonParser, requireAuth, async (req, res) => {
+  const slot = parseInt(req.query.slot, 10) || 1;
+  if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
   const { order } = req.body || {};
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order array required' });
   
-  // This loop is fine for this use case. For very large lists, a single bulk query would be better.
   for (let i = 0; i < order.length; i++) {
     const id = order[i];
-    // We don't need to pre-validate IDs if the user can only see their own blocks.
-    await pool.query('UPDATE prompt_blocks SET position = $1 WHERE id = $2 AND user_id = $3', [i, id, req.user.id]);
+    await pool.query('UPDATE prompt_blocks SET position = $1 WHERE id = $2 AND user_id = $3 AND config_slot = $4', [i, id, req.user.id, slot]);
   }
-  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 ORDER BY position', [req.user.id]);
+  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
   res.json({ blocks: blocks.rows });
 });
 
@@ -219,8 +315,7 @@ async function getUserKeyForProvider(userId, provider) {
   return res.rows[0];
 }
 
-// --- PROMPT PARSING AND BUILDING LOGIC (No changes needed here) ---
-// ... (The entire buildFinalMessages and parseJanitorInput functions remain the same)
+// --- PROMPT PARSING AND BUILDING LOGIC ---
 async function parseJanitorInput(incomingMessages) {
   let characterName = 'Character';
   let characterInfo = null;
@@ -251,56 +346,51 @@ async function parseJanitorInput(incomingMessages) {
 }
 
 async function buildFinalMessages(userId, incomingBody) {
-  if (incomingBody && incomingBody.bypass_prompt_structure) {
-    return incomingBody.messages || [];
-  }
+    const activeSlotResult = await pool.query('SELECT active_config_slot FROM users WHERE id = $1', [userId]);
+    const activeSlot = activeSlotResult.rows[0]?.active_config_slot || 1;
 
-  const result = await pool.query('SELECT * FROM prompt_blocks WHERE user_id = $1 ORDER BY position', [userId]);
-  const userBlocks = result.rows;
-  if (!userBlocks || userBlocks.length === 0) return incomingBody.messages || [];
-
-  const { characterName, characterInfo, userPersona, chatHistory } = await parseJanitorInput(incomingBody.messages);
-  
-  console.log('--- PARSED DATA ---');
-  console.log('Character Name:', characterName);
-  console.log('Character Info Found:', !!characterInfo);
-  console.log('User Persona Found:', !!userPersona);
-  console.log('Chat History Length:', chatHistory.length);
-  console.log('--------------------');
-
-  const finalMessages = [];
-  for (const block of userBlocks) {
-    if (block.immutable) {
-      switch (block.name) {
-        case 'Character Info':
-          if (characterInfo) finalMessages.push(characterInfo);
-          break;
-        case 'User Persona':
-          if (userPersona) finalMessages.push(userPersona);
-          break;
-        case 'Chat History':
-          if (chatHistory.length > 0) finalMessages.push(...chatHistory);
-          break;
-      }
-    } else {
-      let customContent = block.content || '';
-      customContent = customContent.replace(/{{char}}/g, characterName);
-      finalMessages.push({ role: block.role, content: customContent });
+    if (incomingBody && incomingBody.bypass_prompt_structure) {
+        return incomingBody.messages || [];
     }
-  }
 
-  if (finalMessages.length === 0) {
-    console.log('[WARNING] buildFinalMessages resulted in an empty array. Falling back to original messages.');
-    return incomingBody.messages || [];
-  }
+    const result = await pool.query('SELECT * FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [userId, activeSlot]);
+    const userBlocks = result.rows;
+    if (!userBlocks || userBlocks.length === 0) return incomingBody.messages || [];
 
-  return finalMessages;
+    const { characterName, characterInfo, userPersona, chatHistory } = await parseJanitorInput(incomingBody.messages);
+    
+    const finalMessages = [];
+    for (const block of userBlocks) {
+        if (block.immutable) {
+        switch (block.name) {
+            case 'Character Info':
+            if (characterInfo) finalMessages.push(characterInfo);
+            break;
+            case 'User Persona':
+            if (userPersona) finalMessages.push(userPersona);
+            break;
+            case 'Chat History':
+            if (chatHistory.length > 0) finalMessages.push(...chatHistory);
+            break;
+        }
+        } else {
+        let customContent = block.content || '';
+        customContent = customContent.replace(/{{char}}/g, characterName);
+        finalMessages.push({ role: block.role, content: customContent });
+        }
+    }
+
+    if (finalMessages.length === 0) {
+        console.log('[WARNING] buildFinalMessages resulted in an empty array. Falling back to original messages.');
+        return incomingBody.messages || [];
+    }
+
+    return finalMessages;
 }
 
 
-// --- Proxy endpoint (No changes needed here) ---
-// ... (The entire /v1/chat/completions endpoint remains the same)
-app.post('/v1/chat/completions', requireAuth, async (req, res) => {
+// --- Proxy endpoint ---
+app.post('/v1/chat/completions', jsonParser, requireAuth, async (req, res) => {
   const reqId = crypto.randomBytes(4).toString('hex');
   console.log(`\n[${new Date().toISOString()}] --- NEW REQUEST ${reqId} ---`);
   
@@ -332,12 +422,10 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
         return res.status(500).json({ error: 'Proxy error: Failed to construct a valid prompt.' });
     }
 
-    // === GEMINI handling ===
     if (provider === 'gemini') {
       let systemInstructionText = '';
       const contents = [];
-
-      (mergedMessages || []).forEach(m => {
+      mergedMessages.forEach(m => {
         const role = (m.role || 'user').toString();
         if (role === 'system') {
           systemInstructionText += (systemInstructionText ? '\n' : '') + (m.content || '');
@@ -347,27 +435,15 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
           contents.push({ role: 'user', parts: [{ text: m.content || '' }] });
         }
       });
-
-      const safetySettings = Array.isArray(body.safety_settings) ? body.safety_settings : DEFAULT_GEMINI_SAFETY_SETTINGS;
-      const generation_config = {
-        temperature: body.temperature ?? 0.2,
-        top_k: body.top_k ?? undefined,
-        top_p: body.top_p ?? 0.95
-      };
-      const geminiRequestBody = { contents, generation_config, safety_settings: safetySettings };
+      const geminiRequestBody = { contents, generation_config: { temperature: body.temperature ?? 0.2, top_k: body.top_k ?? undefined, top_p: body.top_p ?? 0.95 }, safety_settings: body.safety_settings || DEFAULT_GEMINI_SAFETY_SETTINGS };
       if (systemInstructionText) geminiRequestBody.system_instruction = { parts: [{ text: systemInstructionText }] };
-
-      // STREAMING
       if (body.stream) {
-        const endpoint = 'streamGenerateContent';
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:${endpoint}?key=${encodeURIComponent(apiKey)}`;
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?key=${encodeURIComponent(apiKey)}`;
         const providerResp = await axios.post(url, geminiRequestBody, { headers: { 'Content-Type': 'application/json' }, responseType: 'stream', timeout: 120000 });
-        console.log(`[${reqId}] Request to Gemini successful. Streaming response...`);
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
         res.flushHeaders && res.flushHeaders();
-        
         providerResp.data.on('data', (chunk) => {
           const str = chunk.toString();
           const lines = str.split('\n').map(l => l.trim()).filter(Boolean);
@@ -376,71 +452,35 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
               const parsed = JSON.parse(line);
               const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
               if (text) {
-                const formatted = {
-                  id: `chatcmpl-${reqId}`,
-                  object: "chat.completion.chunk",
-                  created: Math.floor(Date.now() / 1000),
-                  model,
-                  choices: [{ delta: { content: text }, index: 0, finish_reason: null }]
-                };
+                const formatted = { id: `chatcmpl-${reqId}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model, choices: [{ delta: { content: text }, index: 0, finish_reason: null }] };
                 res.write(`data: ${JSON.stringify(formatted)}\n\n`);
               }
-            } catch (e) { /* ignore non-json fragments */ }
+            } catch (e) {}
           }
         });
-        providerResp.data.on('end', () => { console.log(`[${reqId}] Stream ended.`); res.write('data: [DONE]\n\n'); res.end(); });
+        providerResp.data.on('end', () => { res.write('data: [DONE]\n\n'); res.end(); });
         providerResp.data.on('error', (err) => { console.error(`[${reqId}] Gemini stream error`, err); try { res.end(); } catch (e) {} });
         return;
       }
-
-      // NON-STREAMING
-      const endpoint = 'generateContent';
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:${endpoint}?key=${encodeURIComponent(apiKey)}`;
+      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
       const providerResp = await axios.post(url, geminiRequestBody, { headers: { 'Content-Type': 'application/json' }, timeout: 120000 });
-      
       const candidate = providerResp.data?.candidates?.[0];
-      const candidateText = candidate?.content?.parts?.[0]?.text ?? '';
-      const finishReason = candidate?.finishReason || 'stop';
-
-      const responsePayload = {
-        id: `chatcmpl-${reqId}`,
-        object: 'chat.completion',
-        created: Math.floor(Date.now() / 1000),
-        model,
-        choices: [{
-          index: 0,
-          message: { role: 'assistant', content: candidateText },
-          finish_reason: finishReason
-        }],
-        usage: {
-          prompt_tokens: 0,
-          completion_tokens: 0,
-          total_tokens: 0
-        }
-      };
-      
+      const responsePayload = { id: `chatcmpl-${reqId}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model, choices: [{ index: 0, message: { role: 'assistant', content: candidate?.content?.parts?.[0]?.text ?? '' }, finish_reason: candidate?.finishReason || 'stop' }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
       console.log(`[${reqId}] Sending response back to client:`, JSON.stringify(responsePayload, null, 2));
       return res.json(responsePayload);
     }
-
-    // === OPENROUTER / OPENAI handling ===
     if (provider === 'openrouter' || provider === 'openai') {
-      const forwardBody = { ...body };
-      forwardBody.messages = mergedMessages;
-      
+      const forwardBody = { ...body, messages: mergedMessages };
       const forwardUrl = provider === 'openrouter' ? 'https://openrouter.ai/api/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
       if (forwardBody.stream) {
         const resp = await axios.post(forwardUrl, forwardBody, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, responseType: 'stream', timeout: 120000 });
-        console.log(`[${reqId}] Request to ${provider} successful. Streaming response...`);
         res.setHeader('Content-Type', 'text/event-stream');
         res.setHeader('Cache-Control', 'no-cache');
         res.setHeader('Connection', 'keep-alive');
         resp.data.pipe(res);
-        resp.data.on('end', () => console.log(`[${reqId}] Stream ended.`));
         return;
       }
       const providerResp = await axios.post(forwardUrl, forwardBody, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, timeout: 120000 });
-      console.log(`[${reqId}] Request to ${provider} successful. Sending non-streamed response.`);
       console.log(`[${reqId}] Sending response back to client:`, JSON.stringify(providerResp.data, null, 2));
       return res.status(providerResp.status).json(providerResp.data);
     }

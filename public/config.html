@@ -6,91 +6,81 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="/style.css" />
   <style>
-    /* --- Styles for the Revamped Config UI --- */
-    .block-item, .add-block-form {
-      background-color: #f9f9f9;
-      border: 1px solid #ddd;
-      border-radius: 8px;
-      margin-bottom: 1rem;
-      padding: 1rem;
-      display: flex;
-      flex-direction: column;
-      gap: 1rem;
-    }
-    .block-header {
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      gap: 1rem;
-    }
-    .block-title {
-      flex: 1;
-      font-size: 1.1em;
-    }
-    .block-actions {
-      display: flex;
-      gap: 0.5rem;
-      align-items: center;
-    }
-    .block-actions .reorder-btns {
-      display: flex;
-      flex-direction: column;
-      gap: 4px;
-      margin-right: 0.5rem;
-    }
-    .block-actions .reorder-btns button {
-      line-height: 1;
-      padding: 2px 6px;
-    }
-    .edit-form {
-      display: flex;
-      flex-direction: column;
-      gap: 0.75rem;
-    }
-    .edit-form .form-row {
-      display: flex;
-      gap: 0.5rem;
-    }
-    .edit-form .form-row input, .edit-form .form-row select {
-      flex: 1;
-      padding: 0.5rem;
-    }
-    .edit-form textarea {
-      width: 100%;
-      min-height: 150px;
-      font-family: monospace;
-      padding: 0.5rem;
-      box-sizing: border-box; /* Important for 100% width */
-    }
-    .edit-form-actions {
-      display: flex;
-      justify-content: flex-end;
-      gap: 0.5rem;
-    }
-    .edit-form-actions .cancel-btn {
-      background-color: #6c757d;
-    }
-    /* Hide edit form by default */
-    .block-item .edit-form {
-      display: none;
-    }
-    /* When editing, hide the header and show the form */
-    .block-item.is-editing .block-header {
-      display: none;
-    }
-    .block-item.is-editing .edit-form {
-      display: flex;
-    }
+    .config-tabs { display: flex; border-bottom: 1px solid #ddd; margin-bottom: 1rem; }
+    .tab-btn { background: #f1f1f1; border: 1px solid transparent; border-bottom: 0; padding: 10px 15px; cursor: pointer; font-size: 1em; }
+    .tab-btn.active { background: #fff; border-color: #ddd; border-bottom: 1px solid #fff; margin-bottom: -1px; }
+    .tab-btn.is-proxy-active { font-weight: bold; color: #007bff; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .config-actions { margin-bottom: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    .block-item, .add-block-form { background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
+    .block-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+    .block-title { flex: 1; font-size: 1.1em; }
+    .block-actions { display: flex; gap: 0.5rem; align-items: center; }
+    .block-actions .reorder-btns { display: flex; flex-direction: column; gap: 4px; margin-right: 0.5rem; }
+    .block-actions .reorder-btns button { line-height: 1; padding: 2px 6px; }
+    .edit-form { display: flex; flex-direction: column; gap: 0.75rem; }
+    .edit-form .form-row { display: flex; gap: 0.5rem; }
+    .edit-form .form-row input, .edit-form .form-row select { flex: 1; padding: 0.5rem; }
+    .edit-form textarea { width: 100%; min-height: 150px; font-family: monospace; padding: 0.5rem; box-sizing: border-box; }
+    .edit-form-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+    .edit-form-actions .cancel-btn { background-color: #6c757d; }
+    .block-item .edit-form { display: none; }
+    .block-item.is-editing .block-header { display: none; }
+    .block-item.is-editing .edit-form { display: flex; }
+    .import-btn { position: relative; }
+    .import-input { position: absolute; left: 0; top: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+    .active-indicator { font-size: 0.8em; color: #28a745; font-weight: bold; margin-left: auto; }
   </style>
 </head>
 <body>
   <main class="container">
     <h1>Prompt Structure — Config</h1>
-    <p>
-      Arrange and edit your prompt blocks. The immutable blocks (<strong>Character Info</strong>, <strong>User Persona</strong>, and <strong>Chat History</strong>) are special placeholders where parsed content from external apps will be injected. You can use <code>{{char}}</code> in your custom blocks to dynamically insert the character's name.
-    </p>
+    
+    <div class="config-tabs" id="configTabs">
+      <button class="tab-btn active" data-slot="1">Config 1</button>
+      <button class="tab-btn" data-slot="2">Config 2</button>
+      <button class="tab-btn" data-slot="3">Config 3</button>
+    </div>
 
-    <div id="blocksList">Loading...</div>
+    <div id="tabContents">
+      <!-- Content for Tab 1 -->
+      <div class="tab-content active" data-slot="1">
+        <div class="config-actions">
+          <button class="rename-btn">Rename</button>
+          <button class="export-btn">Export</button>
+          <button class="import-btn">Import <input type="file" class="import-input" accept=".json" /></button>
+          <button class="set-active-btn">Set Active for Proxy</button>
+          <span class="active-indicator" style="display:none;">★ Active for Proxy</span>
+        </div>
+        <p>Arrange and edit your prompt blocks. The immutable blocks are special placeholders where parsed content from external apps will be injected. Use <code>{{char}}</code> in your custom blocks to dynamically insert the character's name.</p>
+        <div class="blocksList">Loading...</div>
+      </div>
+      <!-- Content for Tab 2 -->
+      <div class="tab-content" data-slot="2">
+        <div class="config-actions">
+          <button class="rename-btn">Rename</button>
+          <button class="export-btn">Export</button>
+          <button class="import-btn">Import <input type="file" class="import-input" accept=".json" /></button>
+          <button class="set-active-btn">Set Active for Proxy</button>
+          <span class="active-indicator" style="display:none;">★ Active for Proxy</span>
+        </div>
+        <p>Arrange and edit your prompt blocks...</p>
+        <div class="blocksList">Loading...</div>
+      </div>
+      <!-- Content for Tab 3 -->
+      <div class="tab-content" data-slot="3">
+        <div class="config-actions">
+          <button class="rename-btn">Rename</button>
+          <button class="export-btn">Export</button>
+          <button class="import-btn">Import <input type="file" class="import-input" accept=".json" /></button>
+          <button class="set-active-btn">Set Active for Proxy</button>
+          <span class="active-indicator" style="display:none;">★ Active for Proxy</span>
+        </div>
+        <p>Arrange and edit your prompt blocks...</p>
+        <div class="blocksList">Loading...</div>
+      </div>
+    </div>
 
     <hr />
     <h3>Add new block</h3>
@@ -120,137 +110,229 @@
       location.href = '/';
     }
 
-    let allBlocks = [];
+    let activeTab = 1;
+    let proxyActiveSlot = 1;
+    let configNames = ['Config 1', 'Config 2', 'Config 3'];
+    let blocksBySlot = { 1: [], 2: [], 3: [] };
 
     async function api(path, opts = {}) {
-      const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + proxyToken };
-      const res = await fetch(path, { method: opts.method || 'GET', headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
-      const isJson = res.headers.get('content-type')?.includes('application/json');
-      const data = isJson ? await res.json() : await res.text();
-      if (!res.ok) throw data;
-      return data;
+      const headers = opts.headers || {};
+      if (!opts.isFormData) headers['Content-Type'] = 'application/json';
+      headers['Authorization'] = 'Bearer ' + proxyToken;
+      
+      const r = await fetch(path, { 
+        headers, 
+        body: opts.isFormData ? opts.body : (opts.body ? JSON.stringify(opts.body) : undefined), 
+        method: opts.method || 'GET' 
+      });
+
+      // FIX: Handle JSON response for export differently
+      const contentType = r.headers.get('content-type');
+      if (contentType && contentType.includes('application/json') && !opts.isExport) {
+        const data = await r.json();
+        if (!r.ok) throw data;
+        return data;
+      }
+      
+      if (!r.ok) throw await r.text();
+      return r; // Return the whole response for blobs/exports
     }
 
-    function renderBlocks() {
-      const html = allBlocks.map(b => {
-        // For immutable blocks, we show their purpose instead of the placeholder content.
-        const displayContent = b.immutable ? `(This block will be replaced by parsed content: ${b.name})` : (b.content || '');
-        const editorContent = b.immutable ? '' : (b.content || '');
+    function renderBlocks(slot) {
+      const container = document.querySelector(`.tab-content[data-slot="${slot}"] .blocksList`);
+      const currentBlocks = blocksBySlot[slot] || [];
+      
+      if (currentBlocks.length === 0) {
+          container.innerHTML = '<i>No blocks for this config. Add one below or import a config.</i>';
+          return;
+      }
 
+      const html = currentBlocks.map(b => {
+        const editorContent = b.immutable ? '' : (b.content || '');
         return `
         <div class="block-item" id="block-${b.id}" data-id="${b.id}">
-          <!-- View Mode -->
           <div class="block-header">
-            <div class="block-title">
-              <strong>${b.name}</strong> <small>(${b.role}) ${b.immutable ? '<em>immutable placeholder</em>' : ''}</small>
-            </div>
+            <div class="block-title"><strong>${b.name}</strong> <small>(${b.role}) ${b.immutable ? '<em>immutable placeholder</em>' : ''}</small></div>
             <div class="block-actions">
-              <div class="reorder-btns">
-                <button class="up-btn">↑</button>
-                <button class="down-btn">↓</button>
-              </div>
+              <div class="reorder-btns"><button class="up-btn">↑</button><button class="down-btn">↓</button></div>
               ${b.immutable ? '' : `<button class="edit-btn">Edit</button><button class="del-btn">Delete</button>`}
             </div>
           </div>
-
-          <!-- Edit Mode (hidden by default) -->
           <div class="edit-form">
-            <div class="form-row">
-              <input class="edit-name" value="${b.name}" placeholder="Name" />
-              <select class="edit-role">
-                <option value="system" ${b.role === 'system' ? 'selected' : ''}>system</option>
-                <option value="user" ${b.role === 'user' ? 'selected' : ''}>user</option>
-                <option value="assistant" ${b.role === 'assistant' ? 'selected' : ''}>assistant</option>
-              </select>
-            </div>
+            <div class="form-row"><input class="edit-name" value="${b.name}"/><select class="edit-role"><option value="system" ${b.role === 'system' ? 'selected' : ''}>system</option><option value="user" ${b.role === 'user' ? 'selected' : ''}>user</option><option value="assistant" ${b.role === 'assistant' ? 'selected' : ''}>assistant</option></select></div>
             <textarea class="edit-content" placeholder="Block content">${editorContent}</textarea>
-            <div class="edit-form-actions">
-              <button class="cancel-btn">Cancel</button>
-              <button class="save-btn">Save</button>
-            </div>
+            <div class="edit-form-actions"><button class="cancel-btn">Cancel</button><button class="save-btn">Save</button></div>
           </div>
-        </div>
-      `}).join('');
-      $('blocksList').innerHTML = html || '<i>No blocks</i>';
-      attachEventListeners();
+        </div>`;
+      }).join('');
+      container.innerHTML = html;
+      attachBlockEventListeners(slot);
     }
 
-    function attachEventListeners() {
-      document.querySelectorAll('.block-item').forEach(blockEl => {
+    function attachBlockEventListeners(slot) {
+      document.querySelectorAll(`.tab-content[data-slot="${slot}"] .block-item`).forEach(blockEl => {
         const blockId = blockEl.dataset.id;
-
         const upBtn = blockEl.querySelector('.up-btn');
         if (upBtn) upBtn.onclick = () => moveBlock(blockId, 'up');
-
         const downBtn = blockEl.querySelector('.down-btn');
         if (downBtn) downBtn.onclick = () => moveBlock(blockId, 'down');
-
         const delBtn = blockEl.querySelector('.del-btn');
         if (delBtn) delBtn.onclick = async () => {
           if (!confirm('Delete this block?')) return;
           await api('/api/config/' + blockId, { method: 'DELETE' });
-          loadBlocks();
+          loadBlocks(slot);
         };
-
         const editBtn = blockEl.querySelector('.edit-btn');
-        if (editBtn) editBtn.onclick = () => {
-          blockEl.classList.add('is-editing');
-        };
-
+        if (editBtn) editBtn.onclick = () => blockEl.classList.add('is-editing');
         const cancelBtn = blockEl.querySelector('.cancel-btn');
-        if (cancelBtn) cancelBtn.onclick = () => {
-          blockEl.classList.remove('is-editing');
-          renderBlocks();
-        };
-
+        if (cancelBtn) cancelBtn.onclick = () => blockEl.classList.remove('is-editing');
         const saveBtn = blockEl.querySelector('.save-btn');
         if (saveBtn) saveBtn.onclick = async () => {
           const newName = blockEl.querySelector('.edit-name').value;
           const newRole = blockEl.querySelector('.edit-role').value;
           const newContent = blockEl.querySelector('.edit-content').value;
-          try {
-            await api('/api/config/' + blockId, { method: 'PUT', body: { name: newName, role: newRole, content: newContent } });
-            blockEl.classList.remove('is-editing');
-            loadBlocks();
-          } catch (err) {
-            alert('Failed to save: ' + JSON.stringify(err));
-          }
+          await api('/api/config/' + blockId, { method: 'PUT', body: { name: newName, role: newRole, content: newContent } });
+          loadBlocks(slot);
         };
       });
     }
 
     async function moveBlock(blockId, direction) {
       const id = Number(blockId);
-      const order = allBlocks.map(b => b.id);
+      const order = blocksBySlot[activeTab].map(b => b.id);
       const idx = order.indexOf(id);
-
-      if (direction === 'up' && idx > 0) {
-        [order[idx-1], order[idx]] = [order[idx], order[idx-1]];
-      } else if (direction === 'down' && idx < order.length - 1) {
-        [order[idx], order[idx+1]] = [order[idx+1], order[idx]];
-      } else {
-        return;
+      if ((direction === 'up' && idx > 0) || (direction === 'down' && idx < order.length - 1)) {
+        const newIdx = direction === 'up' ? idx - 1 : idx + 1;
+        [order[idx], order[newIdx]] = [order[newIdx], order[idx]];
+        await api(`/api/config/reorder?slot=${activeTab}`, { method: 'POST', body: { order } });
+        loadBlocks(activeTab);
       }
-
-      await api('/api/config/reorder', { method: 'POST', body: { order } });
-      loadBlocks();
     }
 
-
-
-    async function loadBlocks() {
+    async function loadBlocks(slot) {
       try {
-        const j = await api('/api/config');
-        allBlocks = j.blocks;
-        renderBlocks();
+        const j = await api(`/api/config?slot=${slot}`);
+        blocksBySlot[slot] = j.blocks;
+        renderBlocks(slot);
       } catch (err) {
         console.error(err);
-        $('blocksList').innerHTML = `<pre>${JSON.stringify(err, null, 2)}</pre>`;
+        document.querySelector(`.tab-content[data-slot="${slot}"] .blocksList`).innerHTML = `<pre>Error loading blocks: ${JSON.stringify(err, null, 2)}</pre>`;
       }
     }
 
-    window.onload = () => {
-      loadBlocks();
+    async function loadConfigMeta() {
+        const meta = await api('/api/configs/meta');
+        configNames = [meta.config_name_1, meta.config_name_2, meta.config_name_3];
+        proxyActiveSlot = meta.active_config_slot;
+
+        document.querySelectorAll('.tab-btn').forEach((btn, i) => {
+            btn.textContent = configNames[i] || `Config ${i+1}`;
+            btn.classList.toggle('is-proxy-active', (i + 1) == proxyActiveSlot);
+        });
+        document.querySelectorAll('.tab-content').forEach((content, i) => {
+            const slot = i + 1;
+            content.querySelector('.set-active-btn').style.display = (slot == proxyActiveSlot) ? 'none' : 'inline-block';
+            content.querySelector('.active-indicator').style.display = (slot == proxyActiveSlot) ? 'inline-block' : 'none';
+        });
+    }
+
+    function switchTab(slot) {
+        activeTab = slot;
+        document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.slot == slot));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.dataset.slot == slot));
+        loadBlocks(slot);
+    }
+
+    function attachTabEventListeners() {
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.onclick = () => switchTab(btn.dataset.slot);
+        });
+
+        document.querySelectorAll('.rename-btn').forEach(btn => {
+            btn.onclick = async (ev) => {
+                const slot = ev.target.closest('.tab-content').dataset.slot;
+                const currentName = configNames[slot - 1];
+                const newName = prompt(`Enter new name for "${currentName}":`, currentName);
+                if (newName && newName !== currentName) {
+                    configNames[slot - 1] = newName;
+                    await api('/api/configs/meta', { method: 'PUT', body: { names: configNames } });
+                    await loadConfigMeta();
+                }
+            };
+        });
+
+        document.querySelectorAll('.set-active-btn').forEach(btn => {
+            btn.onclick = async (ev) => {
+                const slot = parseInt(ev.target.closest('.tab-content').dataset.slot, 10);
+                await api('/api/configs/active', { method: 'PUT', body: { slot } });
+                await loadConfigMeta();
+            };
+        });
+
+        // FIX: Handle export with JavaScript fetch
+        document.querySelectorAll('.export-btn').forEach(btn => {
+            btn.onclick = async (ev) => {
+                const slot = ev.target.closest('.tab-content').dataset.slot;
+                try {
+                    const response = await api(`/api/configs/export?slot=${slot}`, { isExport: true });
+                    const blob = await response.blob();
+                    const header = response.headers.get('Content-Disposition');
+                    const filename = header ? header.split('filename=')[1].replace(/"/g, '') : `config_${slot}.json`;
+                    
+                    const url = window.URL.createObjectURL(blob);
+                    const a = document.createElement('a');
+                    a.style.display = 'none';
+                    a.href = url;
+                    a.download = filename;
+                    document.body.appendChild(a);
+                    a.click();
+                    window.URL.revokeObjectURL(url);
+                    a.remove();
+                } catch (err) {
+                    alert('Export failed: ' + JSON.stringify(err));
+                }
+            };
+        });
+
+        document.querySelectorAll('.import-input').forEach(input => {
+            input.onchange = async (ev) => {
+                const slot = ev.target.closest('.tab-content').dataset.slot;
+                const file = ev.target.files[0];
+                if (!file) return;
+
+                if (!confirm(`This will overwrite "${configNames[slot-1]}". Are you sure?`)) {
+                    ev.target.value = '';
+                    return;
+                }
+
+                const formData = new FormData();
+                formData.append('configFile', file);
+
+                try {
+                    const result = await api(`/api/configs/import?slot=${slot}`, { method: 'POST', body: formData, isFormData: true });
+                    alert(`Successfully imported "${result.newName}"!`);
+                    await loadConfigMeta();
+                    switchTab(slot);
+                } catch (err) {
+                    alert('Import failed: ' + JSON.stringify(err));
+                } finally {
+                    ev.target.value = '';
+                }
+            };
+        });
+    }
+
+    window.onload = async () => {
+      try {
+        await loadConfigMeta();
+        attachTabEventListeners();
+        switchTab(1);
+      } catch (err) {
+        console.error("Failed to initialize config page:", err);
+        const container = document.querySelector('.tab-content.active .blocksList');
+        if(container) container.innerHTML = `<pre>Fatal Error: Could not load configuration metadata. Please check the console for details.\n\n${JSON.stringify(err, null, 2)}</pre>`;
+      }
+
       $('btnAddBlock').onclick = async () => {
         const name = $('new_name').value;
         const role = $('new_role').value;
@@ -260,11 +342,10 @@
           return;
         }
         try {
-          await api('/api/config', { method: 'POST', body: { name, role, content } });
+          await api(`/api/config?slot=${activeTab}`, { method: 'POST', body: { name, role, content } });
           $('new_name').value = '';
           $('new_content').value = '';
-          $('new_role').value = 'system';
-          loadBlocks();
+          loadBlocks(activeTab);
         } catch (err) { alert(JSON.stringify(err)); }
       };
     };
