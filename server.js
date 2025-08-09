@@ -8,6 +8,7 @@ const axios = require('axios');
 const path = require('path');
 const sqlite3 = require('sqlite3').verbose();
 const { open } = require('sqlite');
+const session = require('express-session');
 
 const PORT = process.env.PORT || 3000;
 const SALT_ROUNDS = 10;
@@ -15,6 +16,12 @@ const SALT_ROUNDS = 10;
 const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: '10mb' }));
+app.use(session({
+  secret: process.env.SESSION_SECRET || 'your-secret-key-change-in-production',
+  resave: false,
+  saveUninitialized: false,
+  cookie: { secure: false, maxAge: 24 * 60 * 60 * 1000 } // 24 hours
+}));
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- Database init (SQLite) ---
@@ -83,6 +90,23 @@ function requireAuth(req, res, next) {
   });
 }
 
+function requireSession(req, res, next) {
+  if (!req.session.userId) {
+    return res.redirect('/');
+  }
+  findUserByToken(req.session.proxyToken).then(user => {
+    if (!user) {
+      req.session.destroy();
+      return res.redirect('/');
+    }
+    req.user = user;
+    next();
+  }).catch(err => {
+    console.error(err);
+    res.status(500).send('Database error');
+  });
+}
+
 // Default Gemini safety settings (from your inspiration file)
 const DEFAULT_GEMINI_SAFETY_SETTINGS = [
   { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
@@ -109,6 +133,10 @@ app.post('/signup', async (req, res) => {
       userId, 'JanitorAI Default (Cannot change)', 'user', '<<EXTERNAL_INPUT_PLACEHOLDER>>', 0, 1
     );
 
+    // Set session
+    req.session.userId = userId;
+    req.session.proxyToken = token;
+
     res.json({ username, proxy_token: token });
   } catch (err) {
     console.error(err);
@@ -124,6 +152,11 @@ app.post('/login', async (req, res) => {
     if (!user) return res.status(401).json({ error: 'invalid credentials' });
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) return res.status(401).json({ error: 'invalid credentials' });
+    
+    // Set session
+    req.session.userId = user.id;
+    req.session.proxyToken = user.proxy_token;
+    
     res.json({ username: user.username, proxy_token: user.proxy_token });
   } catch (err) {
     console.error(err);
@@ -135,6 +168,15 @@ app.post('/regenerate-token', requireAuth, async (req, res) => {
   const newToken = genToken();
   await db.run('UPDATE users SET proxy_token = ? WHERE id = ?', newToken, req.user.id);
   res.json({ proxy_token: newToken });
+});
+
+app.post('/logout', (req, res) => {
+  req.session.destroy((err) => {
+    if (err) {
+      return res.status(500).json({ error: 'Could not log out' });
+    }
+    res.json({ ok: true });
+  });
 });
 
 // --- Keys management ---
@@ -449,8 +491,8 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// serve config page
-app.get('/config', (req, res) => {
+// serve config page with session auth
+app.get('/config', requireSession, (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'config.html'));
 });
 
