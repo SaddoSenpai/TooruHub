@@ -35,71 +35,76 @@
       location.href = '/';
     }
 
+    function escapeHtml(unsafe) {
+      return unsafe
+           .replace(/&/g, "&amp;")
+           .replace(/</g, "&lt;")
+           .replace(/>/g, "&gt;")
+           .replace(/"/g, "&quot;")
+           .replace(/'/g, "&#039;");
+    }
+
     async function api(path, opts = {}) {
-      const headers = { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + proxyToken };
-      const res = await fetch(path, { method: opts.method || 'GET', headers, body: opts.body ? JSON.stringify(opts.body) : undefined });
-      const isJson = res.headers.get('content-type')?.includes('application/json');
-      const data = isJson ? await res.json() : await res.text();
-      if (!res.ok) throw data;
+      const headers = opts.headers || {};
+      const r = await fetch(path, { headers: { 'Content-Type': 'application/json', ...headers }, body: opts.body ? JSON.stringify(opts.body) : undefined, method: opts.method || 'GET', credentials: 'include' });
+      const isJson = r.headers.get('content-type')?.includes('application/json');
+      const data = isJson ? await r.json() : await r.text();
+      if (!r.ok) throw data;
       return data;
     }
 
     async function loadBlocks() {
       try {
-        const j = await api('/config');
-        const html = j.blocks.map(b => `
-          <div class="key-item" id="block-${b.id}">
-            <div style="flex:1;">
-              <strong>${b.name}</strong> <small>(${b.role}) ${b.immutable ? '<em>immutable</em>' : ''}</small>
-              <div style="margin-top:6px;"><pre>${(b.content||'').substring(0,500)}</pre></div>
+        const data = await api('/api/config');
+        const blocks = data.blocks || [];
+        const html = blocks.map((b, i) => `
+          <div class="block-item ${b.immutable ? 'immutable' : ''}">
+            <div class="block-header">
+              <strong>${escapeHtml(b.name)}</strong> (${b.role}) ${b.immutable ? '— Cannot edit' : ''}
             </div>
-            <div style="display:flex;flex-direction:column;gap:6px;">
-              <button data-id="${b.id}" class="up-btn">↑</button>
-              <button data-id="${b.id}" class="down-btn">↓</button>
-              ${b.immutable ? '' : `<button data-id="${b.id}" class="edit-btn">Edit</button><button data-id="${b.id}" class="del-btn">Delete</button>`}
+            <div class="block-content">
+              ${b.immutable ? 
+                `<div class="readonly">${escapeHtml(b.content)}</div>` :
+                `<textarea data-id="${b.id}" data-field="content" class="block-textarea">${escapeHtml(b.content)}</textarea>`
+              }
             </div>
+            ${!b.immutable ? `
+              <div class="block-actions">
+                <input data-id="${b.id}" data-field="name" value="${escapeHtml(b.name)}" placeholder="Block name" />
+                <select data-id="${b.id}" data-field="role">
+                  <option value="system" ${b.role === 'system' ? 'selected' : ''}>system</option>
+                  <option value="user" ${b.role === 'user' ? 'selected' : ''}>user</option>
+                  <option value="assistant" ${b.role === 'assistant' ? 'selected' : ''}>assistant</option>
+                </select>
+                <button onclick="updateBlock(${b.id})">Update</button>
+                <button onclick="deleteBlock(${b.id})" class="delete-btn">Delete</button>
+              </div>
+            ` : ''}
           </div>
         `).join('');
         $('blocksList').innerHTML = html || '<i>No blocks</i>';
-
-        document.querySelectorAll('.del-btn').forEach(b => b.onclick = async (ev) => {
-          const id = ev.target.dataset.id;
-          if (!confirm('Delete this block?')) return;
-          await api('/config/' + id, { method: 'DELETE' });
-          loadBlocks();
-        });
-        document.querySelectorAll('.edit-btn').forEach(b => b.onclick = async (ev) => {
-          const id = ev.target.dataset.id;
-          const newName = prompt('New name?');
-          const newRole = prompt('New role (system|user|assistant)?');
-          const newContent = prompt('New content (string)?');
-          if (newName == null) return;
-          await api('/config/' + id, { method: 'PUT', body: { name: newName, role: newRole, content: newContent } });
-          loadBlocks();
-        });
-        document.querySelectorAll('.up-btn').forEach(btn => btn.onclick = async (ev) => {
-          const id = Number(ev.target.dataset.id);
-          const order = Array.from(document.querySelectorAll('#blocksList .key-item')).map(el => Number(el.id.replace('block-','')));
-          const idx = order.indexOf(id);
-          if (idx <= 0) return;
-          [order[idx-1], order[idx]] = [order[idx], order[idx-1]];
-          await api('/config/reorder', { method: 'POST', body: { order } });
-          loadBlocks();
-        });
-        document.querySelectorAll('.down-btn').forEach(btn => btn.onclick = async (ev) => {
-          const id = Number(ev.target.dataset.id);
-          const order = Array.from(document.querySelectorAll('#blocksList .key-item')).map(el => Number(el.id.replace('block-','')));
-          const idx = order.indexOf(id);
-          if (idx === -1 || idx >= order.length - 1) return;
-          [order[idx], order[idx+1]] = [order[idx+1], order[idx]];
-          await api('/config/reorder', { method: 'POST', body: { order } });
-          loadBlocks();
-        });
-
       } catch (err) {
         console.error(err);
         $('blocksList').innerHTML = `<pre>${JSON.stringify(err, null, 2)}</pre>`;
       }
+    }
+
+    async function updateBlock(id) {
+      const name = document.querySelector(`input[data-id="${id}"][data-field="name"]`).value;
+      const role = document.querySelector(`select[data-id="${id}"][data-field="role"]`).value;
+      const content = document.querySelector(`textarea[data-id="${id}"][data-field="content"]`).value;
+      try {
+        await api(`/api/config/${id}`, { method: 'PUT', body: { name, role, content } });
+        loadBlocks();
+      } catch (err) { alert(JSON.stringify(err)); }
+    }
+
+    async function deleteBlock(id) {
+      if (!confirm('Delete this block?')) return;
+      try {
+        await api(`/api/config/${id}`, { method: 'DELETE' });
+        loadBlocks();
+      } catch (err) { alert(JSON.stringify(err)); }
     }
 
     window.onload = () => {
@@ -109,7 +114,7 @@
         const role = $('new_role').value;
         const content = $('new_content').value;
         try {
-          await api('/config', { method: 'POST', body: { name, role, content } });
+          await api('/api/config', { method: 'POST', body: { name, role, content } });
           $('new_name').value = '';
           $('new_content').value = '';
           loadBlocks();
