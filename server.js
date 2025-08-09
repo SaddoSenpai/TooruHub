@@ -171,50 +171,13 @@ app.delete('/keys/:id', requireAuth, async (req, res) => {
 
 // --- Prompt blocks (config) endpoints ---
 // Get prompt blocks ordered
-// Simple session middleware for config page
-function requireSimpleAuth(req, res, next) {
-  const token = req.query.token || req.headers['authorization']?.replace('Bearer ', '');
-  if (!token) {
-    return res.status(401).send(`
-      <!DOCTYPE html>
-      <html>
-        <head><title>Login Required</title></head>
-        <body>
-          <h1>Please log in first</h1>
-          <p><a href="/">Go to login page</a></p>
-        </body>
-      </html>
-    `);
-  }
-  
-  findUserByToken(token).then(user => {
-    if (!user) {
-      return res.status(401).send(`
-        <!DOCTYPE html>
-        <html>
-          <head><title>Invalid Session</title></head>
-          <body>
-            <h1>Invalid session</h1>
-            <p><a href="/">Please log in again</a></p>
-          </body>
-        </html>
-      `);
-    }
-    req.user = user;
-    next();
-  }).catch(err => {
-    console.error(err);
-    res.status(500).send('Authentication error');
-  });
-}
-
-app.get('/config', requireSimpleAuth, async (req, res) => {
+app.get('/config', requireAuth, async (req, res) => {
   const rows = await db.all('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = ? ORDER BY position', req.user.id);
   res.json({ blocks: rows });
 });
 
 // Add a block (appends to end). role: 'system'|'user'|'assistant'
-app.post('/config', requireSimpleAuth, async (req, res) => {
+app.post('/config', requireAuth, async (req, res) => {
   const { name, role, content } = req.body || {};
   if (!name || !role) return res.status(400).json({ error: 'name and role required' });
 
@@ -228,7 +191,7 @@ app.post('/config', requireSimpleAuth, async (req, res) => {
 });
 
 // Update a block (cannot update immutable)
-app.put('/config/:id', requireSimpleAuth, async (req, res) => {
+app.put('/config/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
   const { name, role, content } = req.body || {};
   const row = await db.get('SELECT * FROM prompt_blocks WHERE id = ? AND user_id = ?', id, req.user.id);
@@ -240,7 +203,7 @@ app.put('/config/:id', requireSimpleAuth, async (req, res) => {
 });
 
 // Delete a block (cannot delete immutable)
-app.delete('/config/:id', requireSimpleAuth, async (req, res) => {
+app.delete('/config/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
   const row = await db.get('SELECT * FROM prompt_blocks WHERE id = ? AND user_id = ?', id, req.user.id);
   if (!row) return res.status(404).json({ error: 'not found' });
@@ -256,7 +219,7 @@ app.delete('/config/:id', requireSimpleAuth, async (req, res) => {
 });
 
 // Reorder endpoint: body { order: [id1, id2, ...] }
-app.post('/config/reorder', requireSimpleAuth, async (req, res) => {
+app.post('/config/reorder', requireAuth, async (req, res) => {
   const { order } = req.body || {};
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order array required' });
   // ensure all ids belong to user
@@ -486,8 +449,8 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'index.html'));
 });
 
-// serve config page - redirect to config with token
-app.get('/config', requireSimpleAuth, (req, res) => {
+// serve config page
+app.get('/config', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'config.html'));
 });
 

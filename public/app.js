@@ -96,7 +96,7 @@ window.onload = () => {
   };
 
   $('btnManagePrompts').onclick = () => {
-    window.location.href = `/config?token=${proxyToken}`;
+    window.location.href = '/config';
   };
 
   $('btnLogout').onclick = () => {
