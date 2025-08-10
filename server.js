@@ -14,13 +14,9 @@ const SALT_ROUNDS = 10;
 
 const app = express();
 app.use(cors());
-// FIX: REMOVE the global JSON body parser. We will apply it selectively.
-// app.use(bodyParser.json({ limit: '10mb' })); 
+app.use(bodyParser.json({ limit: '10mb' }));
 app.use(fileUpload());
 app.use(express.static(path.join(__dirname, 'public')));
-
-// FIX: Create a reusable jsonParser middleware instance.
-const jsonParser = bodyParser.json({ limit: '10mb' });
 
 // --- Database init (Supabase/PostgreSQL) ---
 const pool = new Pool({
@@ -71,8 +67,7 @@ const DEFAULT_GEMINI_SAFETY_SETTINGS = [
 ];
 
 // --- Auth endpoints ---
-// FIX: Add jsonParser to routes that expect a JSON body.
-app.post('/signup', jsonParser, async (req, res) => {
+app.post('/signup', async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'username & password required' });
   try {
@@ -89,9 +84,9 @@ app.post('/signup', jsonParser, async (req, res) => {
 
     for (let slot = 1; slot <= 3; slot++) {
         await Promise.all([
-            pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable, config_slot) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [userId, 'Character Info', 'user', '<<PARSED_CHARACTER_INFO>>', 0, 1, slot]),
-            pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable, config_slot) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [userId, 'User Persona', 'user', '<<PARSED_USER_PERSONA>>', 1, 1, slot]),
-            pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable, config_slot) VALUES ($1, $2, $3, $4, $5, $6, $7)`, [userId, 'Chat History', 'user', '<<PARSED_CHAT_HISTORY>>', 2, 1, slot])
+            pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'Character Info Block', 'user', '<<PARSED_CHARACTER_INFO>>', 0, slot]),
+            pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'User Persona Block', 'user', '<<PARSED_USER_PERSONA>>', 1, slot]),
+            pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'Chat History Block', 'user', '<<PARSED_CHAT_HISTORY>>', 2, slot])
         ]);
     }
 
@@ -102,7 +97,7 @@ app.post('/signup', jsonParser, async (req, res) => {
   }
 });
 
-app.post('/login', jsonParser, async (req, res) => {
+app.post('/login', async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'username & password required' });
   try {
@@ -116,15 +111,12 @@ app.post('/login', jsonParser, async (req, res) => {
     res.status(500).json({ error: 'Login failed' });
   }
 });
-
 app.post('/regenerate-token', requireAuth, async (req, res) => {
   const newToken = genToken();
   await pool.query('UPDATE users SET proxy_token = $1 WHERE id = $2', [newToken, req.user.id]);
   res.json({ proxy_token: newToken });
 });
-
-// --- Keys management ---
-app.post('/add-keys', jsonParser, requireAuth, async (req, res) => {
+app.post('/add-keys', requireAuth, async (req, res) => {
   const { provider, apiKey, name } = req.body || {};
   if (!provider || !apiKey) return res.status(400).json({ error: 'provider and apiKey required' });
   const keyName = name || provider;
@@ -140,12 +132,10 @@ app.post('/add-keys', jsonParser, requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to store key' });
   }
 });
-
 app.get('/keys', requireAuth, async (req, res) => {
   const result = await pool.query('SELECT id, provider, name, created_at FROM api_keys WHERE user_id = $1', [req.user.id]);
   res.json({ keys: result.rows });
 });
-
 app.delete('/keys/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
   const result = await pool.query('DELETE FROM api_keys WHERE id = $1 AND user_id = $2', [id, req.user.id]);
@@ -162,7 +152,7 @@ app.get('/api/configs/meta', requireAuth, async (req, res) => {
     res.json(result.rows[0]);
 });
 
-app.put('/api/configs/meta', jsonParser, requireAuth, async (req, res) => {
+app.put('/api/configs/meta', requireAuth, async (req, res) => {
     const { names } = req.body;
     if (!Array.isArray(names) || names.length !== 3) {
         return res.status(400).json({ error: 'Invalid names array' });
@@ -175,7 +165,7 @@ app.get('/api/configs/active', requireAuth, async (req, res) => {
     const result = await pool.query('SELECT active_config_slot FROM users WHERE id = $1', [req.user.id]);
     res.json(result.rows[0]);
 });
-app.put('/api/configs/active', jsonParser, requireAuth, async (req, res) => {
+app.put('/api/configs/active', requireAuth, async (req, res) => {
     const { slot } = req.body;
     if (![1, 2, 3].includes(slot)) {
         return res.status(400).json({ error: 'Invalid slot number' });
@@ -191,11 +181,11 @@ app.get('/api/configs/export', requireAuth, async (req, res) => {
     const userResult = await pool.query(`SELECT config_name_${slot} as name FROM users WHERE id = $1`, [req.user.id]);
     const configName = userResult.rows[0]?.name || `Config ${slot}`;
 
-    const blocksResult = await pool.query('SELECT name, role, content, immutable FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
+    const blocksResult = await pool.query('SELECT name, role, content FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
     
     const exportData = {
         configName,
-        blocks: blocksResult.rows.map(b => ({ name: b.name, role: b.role, content: b.content, immutable: !!b.immutable }))
+        blocks: blocksResult.rows.map(b => ({ name: b.name, role: b.role, content: b.content }))
     };
 
     res.setHeader('Content-Type', 'application/json');
@@ -203,7 +193,6 @@ app.get('/api/configs/export', requireAuth, async (req, res) => {
     res.send(JSON.stringify(exportData, null, 2));
 });
 
-// FIX: This route does NOT use jsonParser, allowing express-fileupload to work.
 app.post('/api/configs/import', requireAuth, async (req, res) => {
     const slot = parseInt(req.query.slot, 10);
     if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
@@ -219,6 +208,11 @@ app.post('/api/configs/import', requireAuth, async (req, res) => {
         if (!importData.configName || !Array.isArray(importData.blocks)) {
             throw new Error('Invalid JSON format');
         }
+        
+        const fullImportedContent = importData.blocks.map(b => b.content || '').join('');
+        if (!fullImportedContent.includes('<<PARSED_CHARACTER_INFO>>') || !fullImportedContent.includes('<<PARSED_USER_PERSONA>>') || !fullImportedContent.includes('<<PARSED_CHAT_HISTORY>>')) {
+            throw new Error('Imported config is invalid. It must contain all three placeholders: <<PARSED_CHARACTER_INFO>>, <<PARSED_USER_PERSONA>>, and <<PARSED_CHAT_HISTORY>>.');
+        }
 
         await client.query('BEGIN');
 
@@ -228,8 +222,8 @@ app.post('/api/configs/import', requireAuth, async (req, res) => {
         for (let i = 0; i < importData.blocks.length; i++) {
             const block = importData.blocks[i];
             await client.query(
-                'INSERT INTO prompt_blocks (user_id, config_slot, name, role, content, position, immutable) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-                [req.user.id, slot, block.name, block.role, block.content, i, block.immutable ? 1 : 0]
+                'INSERT INTO prompt_blocks (user_id, config_slot, name, role, content, position) VALUES ($1, $2, $3, $4, $5, $6)',
+                [req.user.id, slot, block.name, block.role, block.content, i]
             );
         }
 
@@ -250,33 +244,32 @@ app.post('/api/configs/import', requireAuth, async (req, res) => {
 app.get('/api/config', requireAuth, async (req, res) => {
   const slot = parseInt(req.query.slot, 10) || 1;
   if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
-  const result = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
+  const result = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
   res.json({ blocks: result.rows });
 });
 
-app.post('/api/config', jsonParser, requireAuth, async (req, res) => {
+app.post('/api/config', requireAuth, async (req, res) => {
   const slot = parseInt(req.query.slot, 10) || 1;
   if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
   const { name, role, content } = req.body || {};
   if (!name || !role) return res.status(400).json({ error: 'name and role required' });
   const maxRow = await pool.query('SELECT MAX(position) as mx FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2', [req.user.id, slot]);
   const nextPos = (maxRow.rows[0]?.mx ?? -1) + 1;
-  await pool.query('INSERT INTO prompt_blocks (user_id, name, role, content, position, immutable, config_slot) VALUES ($1, $2, $3, $4, $5, $6, $7)',
-    [req.user.id, name, role, content || '', nextPos, 0, slot]);
-  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
+  await pool.query('INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)',
+    [req.user.id, name, role, content || '', nextPos, slot]);
+  const blocks = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
   res.json({ blocks: blocks.rows });
 });
 
-app.put('/api/config/:id', jsonParser, requireAuth, async (req, res) => {
+app.put('/api/config/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
   const { name, role, content } = req.body || {};
   const blockCheck = await pool.query('SELECT * FROM prompt_blocks WHERE id = $1 AND user_id = $2', [id, req.user.id]);
   const row = blockCheck.rows[0];
   if (!row) return res.status(404).json({ error: 'not found' });
-  if (row.immutable) return res.status(403).json({ error: 'cannot edit immutable block' });
   
   await pool.query('UPDATE prompt_blocks SET name = $1, role = $2, content = $3 WHERE id = $4', [name || row.name, role || row.role, content ?? row.content, id]);
-  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, row.config_slot]);
+  const blocks = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, row.config_slot]);
   res.json({ blocks: blocks.rows });
 });
 
@@ -285,18 +278,17 @@ app.delete('/api/config/:id', requireAuth, async (req, res) => {
   const blockCheck = await pool.query('SELECT * FROM prompt_blocks WHERE id = $1 AND user_id = $2', [id, req.user.id]);
   const row = blockCheck.rows[0];
   if (!row) return res.status(404).json({ error: 'not found' });
-  if (row.immutable) return res.status(403).json({ error: 'cannot delete immutable block' });
   
   await pool.query('DELETE FROM prompt_blocks WHERE id = $1', [id]);
   const remaining = await pool.query('SELECT id FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, row.config_slot]);
   for (let i = 0; i < remaining.rows.length; i++) {
     await pool.query('UPDATE prompt_blocks SET position = $1 WHERE id = $2', [i, remaining.rows[i].id]);
   }
-  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, row.config_slot]);
+  const blocks = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, row.config_slot]);
   res.json({ blocks: blocks.rows });
 });
 
-app.post('/api/config/reorder', jsonParser, requireAuth, async (req, res) => {
+app.post('/api/config/reorder', requireAuth, async (req, res) => {
   const slot = parseInt(req.query.slot, 10) || 1;
   if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
   const { order } = req.body || {};
@@ -306,7 +298,7 @@ app.post('/api/config/reorder', jsonParser, requireAuth, async (req, res) => {
     const id = order[i];
     await pool.query('UPDATE prompt_blocks SET position = $1 WHERE id = $2 AND user_id = $3 AND config_slot = $4', [i, id, req.user.id, slot]);
   }
-  const blocks = await pool.query('SELECT id, name, role, content, position, immutable FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
+  const blocks = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
   res.json({ blocks: blocks.rows });
 });
 
@@ -315,11 +307,11 @@ async function getUserKeyForProvider(userId, provider) {
   return res.rows[0];
 }
 
-// --- PROMPT PARSING AND BUILDING LOGIC ---
+// --- PROMPT PARSING AND BUILDING LOGIC (REWRITTEN) ---
 async function parseJanitorInput(incomingMessages) {
   let characterName = 'Character';
-  let characterInfo = null;
-  let userPersona = null;
+  let characterInfo = '';
+  let userPersona = '';
   let chatHistory = [];
 
   const fullContent = (incomingMessages || []).map(m => m.content || '').join('\n\n');
@@ -328,13 +320,13 @@ async function parseJanitorInput(incomingMessages) {
   const charMatch = fullContent.match(charRegex);
   if (charMatch) {
     characterName = charMatch[1];
-    characterInfo = { role: 'user', content: charMatch[2].trim() };
+    characterInfo = charMatch[2].trim();
   }
 
   const userRegex = /<UserPersona>([\s\S]*?)<\/UserPersona>/;
   const userMatch = fullContent.match(userRegex);
   if (userMatch) {
-    userPersona = { role: 'user', content: userMatch[1].trim() };
+    userPersona = userMatch[1].trim();
   }
 
   chatHistory = (incomingMessages || []).filter(m => {
@@ -357,26 +349,53 @@ async function buildFinalMessages(userId, incomingBody) {
     const userBlocks = result.rows;
     if (!userBlocks || userBlocks.length === 0) return incomingBody.messages || [];
 
+    const fullConfigContent = userBlocks.map(b => b.content || '').join('');
+    if (!fullConfigContent.includes('<<PARSED_CHARACTER_INFO>>') || !fullConfigContent.includes('<<PARSED_USER_PERSONA>>') || !fullConfigContent.includes('<<PARSED_CHAT_HISTORY>>')) {
+        throw new Error('Your active proxy configuration is invalid. It must contain all three placeholders. Please edit it in /config.');
+    }
+
     const { characterName, characterInfo, userPersona, chatHistory } = await parseJanitorInput(incomingBody.messages);
     
     const finalMessages = [];
     for (const block of userBlocks) {
-        if (block.immutable) {
-        switch (block.name) {
-            case 'Character Info':
-            if (characterInfo) finalMessages.push(characterInfo);
-            break;
-            case 'User Persona':
-            if (userPersona) finalMessages.push(userPersona);
-            break;
-            case 'Chat History':
-            if (chatHistory.length > 0) finalMessages.push(...chatHistory);
-            break;
-        }
+        let currentContent = block.content || '';
+        
+        // This is the special case for the chat history, which is an ARRAY.
+        // It must be handled by splitting the block.
+        if (currentContent.includes('<<PARSED_CHAT_HISTORY>>')) {
+            const parts = currentContent.split('<<PARSED_CHAT_HISTORY>>');
+            const beforeText = parts[0];
+            const afterText = parts[1];
+
+            // Add a message for any text BEFORE the placeholder
+            if (beforeText.trim()) {
+                let processedBeforeText = beforeText.replace(/{{char}}/g, characterName);
+                processedBeforeText = processedBeforeText.replace(/<<PARSED_CHARACTER_INFO>>/g, characterInfo);
+                processedBeforeText = processedBeforeText.replace(/<<PARSED_USER_PERSONA>>/g, userPersona);
+                finalMessages.push({ role: block.role, content: processedBeforeText });
+            }
+            
+            // Spread the actual array of chat history messages
+            finalMessages.push(...chatHistory);
+
+            // Add a message for any text AFTER the placeholder
+            if (afterText.trim()) {
+                let processedAfterText = afterText.replace(/{{char}}/g, characterName);
+                processedAfterText = processedAfterText.replace(/<<PARSED_CHARACTER_INFO>>/g, characterInfo);
+                processedAfterText = processedAfterText.replace(/<<PARSED_USER_PERSONA>>/g, userPersona);
+                finalMessages.push({ role: block.role, content: processedAfterText });
+            }
         } else {
-        let customContent = block.content || '';
-        customContent = customContent.replace(/{{char}}/g, characterName);
-        finalMessages.push({ role: block.role, content: customContent });
+            // This is the normal case for simple STRING placeholders.
+            // We perform a direct find-and-replace within the content.
+            currentContent = currentContent.replace(/{{char}}/g, characterName);
+            currentContent = currentContent.replace(/<<PARSED_CHARACTER_INFO>>/g, characterInfo);
+            currentContent = currentContent.replace(/<<PARSED_USER_PERSONA>>/g, userPersona);
+            
+            // Only add the block if it's not empty after replacements
+            if (currentContent.trim()) {
+                finalMessages.push({ role: block.role, content: currentContent });
+            }
         }
     }
 
@@ -390,7 +409,7 @@ async function buildFinalMessages(userId, incomingBody) {
 
 
 // --- Proxy endpoint ---
-app.post('/v1/chat/completions', jsonParser, requireAuth, async (req, res) => {
+app.post('/v1/chat/completions', requireAuth, async (req, res) => {
   const reqId = crypto.randomBytes(4).toString('hex');
   console.log(`\n[${new Date().toISOString()}] --- NEW REQUEST ${reqId} ---`);
   
@@ -422,6 +441,7 @@ app.post('/v1/chat/completions', jsonParser, requireAuth, async (req, res) => {
         return res.status(500).json({ error: 'Proxy error: Failed to construct a valid prompt.' });
     }
 
+    // ... (rest of provider handling is unchanged)
     if (provider === 'gemini') {
       let systemInstructionText = '';
       const contents = [];
@@ -466,7 +486,6 @@ app.post('/v1/chat/completions', jsonParser, requireAuth, async (req, res) => {
       const providerResp = await axios.post(url, geminiRequestBody, { headers: { 'Content-Type': 'application/json' }, timeout: 120000 });
       const candidate = providerResp.data?.candidates?.[0];
       const responsePayload = { id: `chatcmpl-${reqId}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model, choices: [{ index: 0, message: { role: 'assistant', content: candidate?.content?.parts?.[0]?.text ?? '' }, finish_reason: candidate?.finishReason || 'stop' }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
-      console.log(`[${reqId}] Sending response back to client:`, JSON.stringify(responsePayload, null, 2));
       return res.json(responsePayload);
     }
     if (provider === 'openrouter' || provider === 'openai') {
@@ -481,20 +500,12 @@ app.post('/v1/chat/completions', jsonParser, requireAuth, async (req, res) => {
         return;
       }
       const providerResp = await axios.post(forwardUrl, forwardBody, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, timeout: 120000 });
-      console.log(`[${reqId}] Sending response back to client:`, JSON.stringify(providerResp.data, null, 2));
       return res.status(providerResp.status).json(providerResp.data);
     }
 
     return res.status(400).json({ error: `Unsupported provider '${provider}'.` });
   } catch (err) {
-    console.error(`[${reqId}] --- PROXY ERROR ---`);
-    if (err.response) {
-      console.error('Error Status:', err.response.status);
-      console.error('Error Data:', JSON.stringify(err.response.data, null, 2));
-    } else {
-      console.error('Error Message:', err.message);
-    }
-    console.error('--------------------');
+    console.error(`[${reqId}] --- PROXY ERROR ---`, err.response?.data ?? err.message);
     const msg = err.response?.data ?? { message: err.message };
     res.status(500).json({ error: 'Proxy failed', detail: msg });
   }

@@ -31,6 +31,7 @@
     .import-btn { position: relative; }
     .import-input { position: absolute; left: 0; top: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
     .active-indicator { font-size: 0.8em; color: #28a745; font-weight: bold; margin-left: auto; }
+    .validation-error { color: #dc3545; font-weight: bold; border: 1px solid; padding: 0.5rem; margin-bottom: 1rem; }
   </style>
 </head>
 <body>
@@ -53,7 +54,7 @@
           <button class="set-active-btn">Set Active for Proxy</button>
           <span class="active-indicator" style="display:none;">★ Active for Proxy</span>
         </div>
-        <p>Arrange and edit your prompt blocks. The immutable blocks are special placeholders where parsed content from external apps will be injected. Use <code>{{char}}</code> in your custom blocks to dynamically insert the character's name.</p>
+        <p>Arrange and edit your prompt blocks. Your config MUST contain these three placeholders: <code>&lt;&lt;PARSED_CHARACTER_INFO&gt;&gt;</code>, <code>&lt;&lt;PARSED_USER_PERSONA&gt;&gt;</code>, and <code>&lt;&lt;PARSED_CHAT_HISTORY&gt;&gt;</code>. Use <code>{{char}}</code> for the character's name.</p>
         <div class="blocksList">Loading...</div>
       </div>
       <!-- Content for Tab 2 -->
@@ -86,7 +87,7 @@
     <h3>Add new block</h3>
     <div id="addBlockBox" class="add-block-form">
       <div class="form-row">
-        <input id="new_name" placeholder="Name (eg. 'Assistant Persona')" />
+        <input id="new_name" placeholder="Name (eg. 'Jailbreak')" />
         <select id="new_role">
           <option value="system">system</option>
           <option value="user">user</option>
@@ -114,6 +115,7 @@
     let proxyActiveSlot = 1;
     let configNames = ['Config 1', 'Config 2', 'Config 3'];
     let blocksBySlot = { 1: [], 2: [], 3: [] };
+    const REQUIRED_PLACEHOLDERS = ['<<PARSED_CHARACTER_INFO>>', '<<PARSED_USER_PERSONA>>', '<<PARSED_CHAT_HISTORY>>'];
 
     async function api(path, opts = {}) {
       const headers = opts.headers || {};
@@ -126,7 +128,6 @@
         method: opts.method || 'GET' 
       });
 
-      // FIX: Handle JSON response for export differently
       const contentType = r.headers.get('content-type');
       if (contentType && contentType.includes('application/json') && !opts.isExport) {
         const data = await r.json();
@@ -135,38 +136,49 @@
       }
       
       if (!r.ok) throw await r.text();
-      return r; // Return the whole response for blobs/exports
+      return r;
     }
 
-    function renderBlocks(slot) {
-      const container = document.querySelector(`.tab-content[data-slot="${slot}"] .blocksList`);
-      const currentBlocks = blocksBySlot[slot] || [];
-      
-      if (currentBlocks.length === 0) {
-          container.innerHTML = '<i>No blocks for this config. Add one below or import a config.</i>';
-          return;
-      }
+    function validateConfig(blocks) {
+        const fullContent = blocks.map(b => b.content || '').join('');
+        const missing = REQUIRED_PLACEHOLDERS.filter(p => !fullContent.includes(p));
+        return missing;
+    }
 
-      const html = currentBlocks.map(b => {
-        const editorContent = b.immutable ? '' : (b.content || '');
-        return `
-        <div class="block-item" id="block-${b.id}" data-id="${b.id}">
-          <div class="block-header">
-            <div class="block-title"><strong>${b.name}</strong> <small>(${b.role}) ${b.immutable ? '<em>immutable placeholder</em>' : ''}</small></div>
-            <div class="block-actions">
-              <div class="reorder-btns"><button class="up-btn">↑</button><button class="down-btn">↓</button></div>
-              ${b.immutable ? '' : `<button class="edit-btn">Edit</button><button class="del-btn">Delete</button>`}
-            </div>
-          </div>
-          <div class="edit-form">
-            <div class="form-row"><input class="edit-name" value="${b.name}"/><select class="edit-role"><option value="system" ${b.role === 'system' ? 'selected' : ''}>system</option><option value="user" ${b.role === 'user' ? 'selected' : ''}>user</option><option value="assistant" ${b.role === 'assistant' ? 'selected' : ''}>assistant</option></select></div>
-            <textarea class="edit-content" placeholder="Block content">${editorContent}</textarea>
-            <div class="edit-form-actions"><button class="cancel-btn">Cancel</button><button class="save-btn">Save</button></div>
-          </div>
-        </div>`;
-      }).join('');
-      container.innerHTML = html;
-      attachBlockEventListeners(slot);
+    // FIX: Rewritten renderBlocks function
+    function renderBlocks(slot) {
+        const container = document.querySelector(`.tab-content[data-slot="${slot}"] .blocksList`);
+        const currentBlocks = blocksBySlot[slot] || [];
+        let html = ''; // Start with an empty string
+
+        const missing = validateConfig(currentBlocks);
+        if (missing.length > 0) {
+            html += `<div class="validation-error"><strong>Invalid Configuration!</strong> Missing required placeholder(s):<br><code>${missing.join(', ')}</code></div>`;
+        }
+
+        if (currentBlocks.length === 0) {
+            html += '<i>No blocks for this config. Add one below or import a config.</i>';
+        } else {
+            html += currentBlocks.map(b => `
+            <div class="block-item" id="block-${b.id}" data-id="${b.id}">
+              <div class="block-header">
+                <div class="block-title"><strong>${b.name}</strong> <small>(${b.role})</small></div>
+                <div class="block-actions">
+                  <div class="reorder-btns"><button class="up-btn">↑</button><button class="down-btn">↓</button></div>
+                  <button class="edit-btn">Edit</button><button class="del-btn">Delete</button>
+                </div>
+              </div>
+              <div class="edit-form">
+                <div class="form-row"><input class="edit-name" value="${b.name}"/><select class="edit-role"><option value="system" ${b.role === 'system' ? 'selected' : ''}>system</option><option value="user" ${b.role === 'user' ? 'selected' : ''}>user</option><option value="assistant" ${b.role === 'assistant' ? 'selected' : ''}>assistant</option></select></div>
+                <textarea class="edit-content" placeholder="Block content">${b.content || ''}</textarea>
+                <div class="edit-form-actions"><button class="cancel-btn">Cancel</button><button class="save-btn">Save</button></div>
+              </div>
+            </div>`).join('');
+        }
+
+        // Set the innerHTML only ONCE to replace all previous content
+        container.innerHTML = html;
+        attachBlockEventListeners(slot);
     }
 
     function attachBlockEventListeners(slot) {
@@ -178,6 +190,12 @@
         if (downBtn) downBtn.onclick = () => moveBlock(blockId, 'down');
         const delBtn = blockEl.querySelector('.del-btn');
         if (delBtn) delBtn.onclick = async () => {
+          const tempBlocks = blocksBySlot[slot].filter(b => b.id != blockId);
+          const missing = validateConfig(tempBlocks);
+          if (missing.length > 0) {
+              alert(`Cannot delete this block, as it would make the config invalid. Missing: ${missing.join(', ')}`);
+              return;
+          }
           if (!confirm('Delete this block?')) return;
           await api('/api/config/' + blockId, { method: 'DELETE' });
           loadBlocks(slot);
@@ -191,6 +209,14 @@
           const newName = blockEl.querySelector('.edit-name').value;
           const newRole = blockEl.querySelector('.edit-role').value;
           const newContent = blockEl.querySelector('.edit-content').value;
+          
+          const tempBlocks = blocksBySlot[slot].map(b => b.id == blockId ? {...b, content: newContent} : b);
+          const missing = validateConfig(tempBlocks);
+          if (missing.length > 0) {
+              alert(`Cannot save this block, as it would make the config invalid. Missing: ${missing.join(', ')}`);
+              return;
+          }
+
           await api('/api/config/' + blockId, { method: 'PUT', body: { name: newName, role: newRole, content: newContent } });
           loadBlocks(slot);
         };
@@ -269,7 +295,6 @@
             };
         });
 
-        // FIX: Handle export with JavaScript fetch
         document.querySelectorAll('.export-btn').forEach(btn => {
             btn.onclick = async (ev) => {
                 const slot = ev.target.closest('.tab-content').dataset.slot;
@@ -314,7 +339,7 @@
                     await loadConfigMeta();
                     switchTab(slot);
                 } catch (err) {
-                    alert('Import failed: ' + JSON.stringify(err));
+                    alert('Import failed: ' + (err.detail || JSON.stringify(err)));
                 } finally {
                     ev.target.value = '';
                 }
