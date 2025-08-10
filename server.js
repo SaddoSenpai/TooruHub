@@ -165,8 +165,23 @@ app.post('/api/keys/:id/reactivate', requireAuth, async (req, res) => {
     res.json({ ok: true });
 });
 
+// NEW: Endpoint to manually deactivate a key
+app.post('/api/keys/:id/deactivate', requireAuth, async (req, res) => {
+    const id = req.params.id;
+    const { reason } = req.body;
+    const result = await pool.query(
+        'UPDATE api_keys SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = $1 WHERE id = $2 AND user_id = $3',
+        [reason || 'Manually deactivated by user.', id, req.user.id]
+    );
+    if (result.rowCount === 0) {
+        return res.status(404).json({ error: 'Key not found or does not belong to user.' });
+    }
+    res.json({ ok: true });
+});
+
 
 // --- Config Management Endpoints ---
+// ... (These are unchanged)
 app.get('/api/configs/meta', requireAuth, async (req, res) => {
     const result = await pool.query('SELECT config_name_1, config_name_2, config_name_3, active_config_slot FROM users WHERE id = $1', [req.user.id]);
     res.json(result.rows[0]);
@@ -289,6 +304,7 @@ app.post('/api/config/reorder', requireAuth, async (req, res) => {
 
 
 // --- PROMPT PARSING AND BUILDING LOGIC ---
+// ... (This section is unchanged)
 async function getRotatingKey(userId, provider) {
     const res = await pool.query('SELECT * FROM api_keys WHERE user_id = $1 AND provider = $2 AND is_active = TRUE ORDER BY id', [userId, provider]);
     const activeKeys = res.rows;
@@ -300,7 +316,6 @@ async function getRotatingKey(userId, provider) {
     keyRotationState[userId][provider] = (currentIndex + 1) % activeKeys.length;
     return selectedKey;
 }
-
 async function deactivateKey(keyId, reason) {
     console.log(`Deactivating key ${keyId} due to: ${reason}`);
     await pool.query(
@@ -308,7 +323,6 @@ async function deactivateKey(keyId, reason) {
         [reason, keyId]
     );
 }
-
 async function parseJanitorInput(incomingMessages) {
   let characterName = 'Character';
   let characterInfo = '';
@@ -332,7 +346,6 @@ async function parseJanitorInput(incomingMessages) {
   });
   return { characterName, characterInfo, userPersona, chatHistory };
 }
-
 async function buildFinalMessages(userId, incomingBody) {
     const activeSlotResult = await pool.query('SELECT active_config_slot FROM users WHERE id = $1', [userId]);
     const activeSlot = activeSlotResult.rows[0]?.active_config_slot || 1;
@@ -527,10 +540,9 @@ async function reactivateKeys() {
     }
 }
 
-// FIX: Run the job once on startup, then schedule it
 console.log('Performing initial key reactivation check on startup...');
 reactivateKeys();
-setInterval(reactivateKeys, 60 * 60 * 1000); // 1 hour
+setInterval(reactivateKeys, 60 * 60 * 1000);
 
 app.listen(PORT, () => {
   console.log(`AI key proxy server listening on port ${PORT}`);

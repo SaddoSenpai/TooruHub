@@ -30,16 +30,18 @@ async function loadKeys() {
       <div class="key-item ${!k.is_active ? 'deactivated' : ''}">
         <div>
           <strong>${k.provider}</strong> (${k.name || '-'}) — ${new Date(k.created_at).toLocaleString()}
-          ${!k.is_active ? '<span> ⚠️ Rate-Limited</span>' : ''}
+          ${!k.is_active ? '<span> ⚠️ Rate-Limited / Inactive</span>' : ''}
         </div>
         <div>
           <button data-id="${k.id}" class="del-btn">Delete</button>
-          ${!k.is_active ? `<button data-id="${k.id}" data-reason="${k.deactivation_reason || 'No reason specified.'}" class="reactivate-btn">Reactivate</button>` : ''}
+          ${k.is_active 
+            ? `<button data-id="${k.id}" class="deactivate-btn">Deactivate</button>`
+            : `<button data-id="${k.id}" data-reason="${k.deactivation_reason || 'No reason specified.'}" class="reactivate-btn">Reactivate</button>`
+          }
         </div>
       </div>`).join('');
     $('keysList').innerHTML = list || '<i>No keys yet</i>';
     
-    // Attach delete listeners
     document.querySelectorAll('.del-btn').forEach(b => b.onclick = async (ev) => {
       const id = ev.target.dataset.id;
       if (!confirm('Delete key?')) return;
@@ -47,7 +49,6 @@ async function loadKeys() {
       loadKeys();
     });
 
-    // Attach reactivate listeners
     document.querySelectorAll('.reactivate-btn').forEach(b => b.onclick = async (ev) => {
         const id = ev.target.dataset.id;
         const reason = ev.target.dataset.reason;
@@ -58,6 +59,19 @@ async function loadKeys() {
             } catch (err) {
                 alert('Failed to reactivate key: ' + JSON.stringify(err));
             }
+        }
+    });
+
+    // NEW: Attach deactivate listeners
+    document.querySelectorAll('.deactivate-btn').forEach(b => b.onclick = async (ev) => {
+        const id = ev.target.dataset.id;
+        const reason = prompt("Optional: Enter a reason for deactivating this key.", "Manually deactivated.");
+        if (reason === null) return; // User cancelled the prompt
+        try {
+            await api(`/api/keys/${id}/deactivate`, { method: 'POST', body: { reason } });
+            loadKeys();
+        } catch (err) {
+            alert('Failed to deactivate key: ' + JSON.stringify(err));
         }
     });
 
