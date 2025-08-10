@@ -33,6 +33,7 @@ async function loadKeys() {
           ${!k.is_active ? '<span> ⚠️ Rate-Limited / Inactive</span>' : ''}
         </div>
         <div>
+          <button data-id="${k.id}" class="test-btn">Test</button>
           <button data-id="${k.id}" class="del-btn">Delete</button>
           ${k.is_active 
             ? `<button data-id="${k.id}" class="deactivate-btn">Deactivate</button>`
@@ -62,16 +63,36 @@ async function loadKeys() {
         }
     });
 
-    // NEW: Attach deactivate listeners
     document.querySelectorAll('.deactivate-btn').forEach(b => b.onclick = async (ev) => {
         const id = ev.target.dataset.id;
         const reason = prompt("Optional: Enter a reason for deactivating this key.", "Manually deactivated.");
-        if (reason === null) return; // User cancelled the prompt
+        if (reason === null) return;
         try {
             await api(`/api/keys/${id}/deactivate`, { method: 'POST', body: { reason } });
             loadKeys();
         } catch (err) {
             alert('Failed to deactivate key: ' + JSON.stringify(err));
+        }
+    });
+
+    // NEW: Attach test listeners
+    document.querySelectorAll('.test-btn').forEach(b => b.onclick = async (ev) => {
+        const btn = ev.target;
+        const id = btn.dataset.id;
+        
+        btn.textContent = 'Testing...';
+        btn.disabled = true;
+        btn.classList.remove('tested-ok');
+
+        try {
+            await api(`/api/keys/${id}/test`, { method: 'POST' });
+            btn.textContent = 'Key is working';
+            btn.classList.add('tested-ok');
+            // Keep it disabled after a successful test to show the result
+        } catch (err) {
+            alert('Key test failed:\n\n' + (err.detail ? JSON.stringify(err.detail, null, 2) : JSON.stringify(err)));
+            btn.textContent = 'Test'; // Reset on failure
+            btn.disabled = false;
         }
     });
 

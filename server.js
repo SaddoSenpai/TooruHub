@@ -24,30 +24,23 @@ const pool = new Pool({
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : undefined
 });
 
-pool.connect()
-  .then(() => console.log('Successfully connected to Supabase database.'))
-  .catch(err => console.error('Database connection error', err.stack));
-
-
 // --- Key Rotation State (In-Memory) ---
 const keyRotationState = {};
 
 
 // --- Helpers ---
+// ... (This section is unchanged)
 function genToken() {
   return crypto.randomBytes(32).toString('hex');
 }
-
 async function findUserByUsername(username) {
   const res = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
   return res.rows[0];
 }
-
 async function findUserByToken(token) {
   const res = await pool.query('SELECT * FROM users WHERE proxy_token = $1', [token]);
   return res.rows[0];
 }
-
 function requireAuth(req, res, next) {
   const auth = req.headers.authorization;
   const token = auth?.startsWith('Bearer ') ? auth.split(' ')[1].trim() : null;
@@ -62,7 +55,8 @@ function requireAuth(req, res, next) {
   });
 }
 
-// Default Gemini safety settings
+// --- Default Gemini safety settings ---
+// ... (This section is unchanged)
 const DEFAULT_GEMINI_SAFETY_SETTINGS = [
   { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
   { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
@@ -71,6 +65,7 @@ const DEFAULT_GEMINI_SAFETY_SETTINGS = [
 ];
 
 // --- Auth endpoints ---
+// ... (This section is unchanged)
 app.post('/signup', async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'username & password required' });
@@ -79,13 +74,8 @@ app.post('/signup', async (req, res) => {
     if (existing) return res.status(400).json({ error: 'username already taken' });
     const hash = await bcrypt.hash(password, SALT_ROUNDS);
     const token = genToken();
-    
-    const result = await pool.query(
-      'INSERT INTO users (username, password_hash, proxy_token) VALUES ($1, $2, $3) RETURNING id',
-      [username, hash, token]
-    );
+    const result = await pool.query('INSERT INTO users (username, password_hash, proxy_token) VALUES ($1, $2, $3) RETURNING id', [username, hash, token]);
     const userId = result.rows[0].id;
-
     for (let slot = 1; slot <= 3; slot++) {
         await Promise.all([
             pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'Character Info Block', 'user', '<<PARSED_CHARACTER_INFO>>', 0, slot]),
@@ -93,14 +83,12 @@ app.post('/signup', async (req, res) => {
             pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'Chat History Block', 'user', '<<PARSED_CHAT_HISTORY>>', 2, slot])
         ]);
     }
-
     res.json({ username, proxy_token: token });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'Failed to create user' });
   }
 });
-
 app.post('/login', async (req, res) => {
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'username & password required' });
@@ -122,6 +110,7 @@ app.post('/regenerate-token', requireAuth, async (req, res) => {
 });
 
 // --- Keys management ---
+// ... (This section is unchanged)
 app.post('/add-keys', requireAuth, async (req, res) => {
   const { provider, apiKey, name } = req.body || {};
   if (!provider || !apiKey) return res.status(400).json({ error: 'provider and apiKey required' });
@@ -138,59 +127,69 @@ app.post('/add-keys', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to store key' });
   }
 });
-
 app.get('/keys', requireAuth, async (req, res) => {
   const result = await pool.query('SELECT id, provider, name, created_at, is_active, deactivation_reason FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC', [req.user.id]);
   res.json({ keys: result.rows });
 });
-
 app.delete('/keys/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
   const result = await pool.query('DELETE FROM api_keys WHERE id = $1 AND user_id = $2', [id, req.user.id]);
-  if (result.rowCount === 0) {
-    return res.status(404).json({ error: 'not found' });
-  }
+  if (result.rowCount === 0) { return res.status(404).json({ error: 'not found' }); }
   res.json({ ok: true });
 });
-
 app.post('/api/keys/:id/reactivate', requireAuth, async (req, res) => {
     const id = req.params.id;
-    const result = await pool.query(
-        'UPDATE api_keys SET is_active = TRUE, deactivated_at = NULL, deactivation_reason = NULL WHERE id = $1 AND user_id = $2',
-        [id, req.user.id]
-    );
-    if (result.rowCount === 0) {
-        return res.status(404).json({ error: 'Key not found or does not belong to user.' });
-    }
+    const result = await pool.query('UPDATE api_keys SET is_active = TRUE, deactivated_at = NULL, deactivation_reason = NULL WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+    if (result.rowCount === 0) { return res.status(404).json({ error: 'Key not found or does not belong to user.' }); }
     res.json({ ok: true });
 });
-
-// NEW: Endpoint to manually deactivate a key
 app.post('/api/keys/:id/deactivate', requireAuth, async (req, res) => {
     const id = req.params.id;
     const { reason } = req.body;
-    const result = await pool.query(
-        'UPDATE api_keys SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = $1 WHERE id = $2 AND user_id = $3',
-        [reason || 'Manually deactivated by user.', id, req.user.id]
-    );
-    if (result.rowCount === 0) {
-        return res.status(404).json({ error: 'Key not found or does not belong to user.' });
-    }
+    const result = await pool.query('UPDATE api_keys SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = $1 WHERE id = $2 AND user_id = $3', [reason || 'Manually deactivated by user.', id, req.user.id]);
+    if (result.rowCount === 0) { return res.status(404).json({ error: 'Key not found or does not belong to user.' }); }
     res.json({ ok: true });
 });
-
+app.post('/api/keys/:id/test', requireAuth, async (req, res) => {
+    const id = req.params.id;
+    try {
+        const keyResult = await pool.query('SELECT * FROM api_keys WHERE id = $1 AND user_id = $2', [id, req.user.id]);
+        const keyToTest = keyResult.rows[0];
+        if (!keyToTest) { return res.status(404).json({ error: 'Key not found.' }); }
+        const { provider, api_key } = keyToTest;
+        let testPayload, testUrl, headers;
+        if (provider === 'gemini') {
+            testUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${api_key}`;
+            testPayload = { contents: [{ parts: [{ text: "hello" }] }] };
+            headers = { 'Content-Type': 'application/json' };
+        } else if (provider === 'openai') {
+            testUrl = 'https://api.openai.com/v1/chat/completions';
+            testPayload = { model: 'gpt-3.5-turbo', messages: [{ role: 'user', content: 'hello' }], max_tokens: 1 };
+            headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${api_key}` };
+        } else if (provider === 'openrouter') {
+            testUrl = 'https://openrouter.ai/api/v1/chat/completions';
+            testPayload = { model: 'mistralai/mistral-7b-instruct:free', messages: [{ role: 'user', content: 'hello' }], max_tokens: 1 };
+            headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${api_key}` };
+        } else {
+            return res.status(400).json({ error: 'Testing not supported for this provider.' });
+        }
+        await axios.post(testUrl, testPayload, { headers, timeout: 15000 });
+        res.json({ ok: true, message: 'Key is working' });
+    } catch (err) {
+        console.error(`Key test failed for ID ${id}:`, err.response?.data ?? err.message);
+        res.status(400).json({ ok: false, error: 'Key test failed.', detail: err.response?.data ?? err.message });
+    }
+});
 
 // --- Config Management Endpoints ---
-// ... (These are unchanged)
+// ... (This section is unchanged)
 app.get('/api/configs/meta', requireAuth, async (req, res) => {
     const result = await pool.query('SELECT config_name_1, config_name_2, config_name_3, active_config_slot FROM users WHERE id = $1', [req.user.id]);
     res.json(result.rows[0]);
 });
 app.put('/api/configs/meta', requireAuth, async (req, res) => {
     const { names } = req.body;
-    if (!Array.isArray(names) || names.length !== 3) {
-        return res.status(400).json({ error: 'Invalid names array' });
-    }
+    if (!Array.isArray(names) || names.length !== 3) { return res.status(400).json({ error: 'Invalid names array' }); }
     await pool.query('UPDATE users SET config_name_1 = $1, config_name_2 = $2, config_name_3 = $3 WHERE id = $4', [names[0], names[1], names[2], req.user.id]);
     res.json({ ok: true });
 });
@@ -200,9 +199,7 @@ app.get('/api/configs/active', requireAuth, async (req, res) => {
 });
 app.put('/api/configs/active', requireAuth, async (req, res) => {
     const { slot } = req.body;
-    if (![1, 2, 3].includes(slot)) {
-        return res.status(400).json({ error: 'Invalid slot number' });
-    }
+    if (![1, 2, 3].includes(slot)) { return res.status(400).json({ error: 'Invalid slot number' }); }
     await pool.query('UPDATE users SET active_config_slot = $1 WHERE id = $2', [slot, req.user.id]);
     res.json({ ok: true });
 });
@@ -220,9 +217,7 @@ app.get('/api/configs/export', requireAuth, async (req, res) => {
 app.post('/api/configs/import', requireAuth, async (req, res) => {
     const slot = parseInt(req.query.slot, 10);
     if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
-    if (!req.files || Object.keys(req.files).length === 0) {
-        return res.status(400).json({ error: 'No file uploaded.' });
-    }
+    if (!req.files || Object.keys(req.files).length === 0) { return res.status(400).json({ error: 'No file uploaded.' }); }
     const client = await pool.connect();
     try {
         const file = req.files.configFile;
@@ -318,10 +313,7 @@ async function getRotatingKey(userId, provider) {
 }
 async function deactivateKey(keyId, reason) {
     console.log(`Deactivating key ${keyId} due to: ${reason}`);
-    await pool.query(
-        'UPDATE api_keys SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = $1 WHERE id = $2',
-        [reason, keyId]
-    );
+    await pool.query('UPDATE api_keys SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = $1 WHERE id = $2', [reason, keyId]);
 }
 async function parseJanitorInput(incomingMessages) {
   let characterName = 'Character';
@@ -331,27 +323,17 @@ async function parseJanitorInput(incomingMessages) {
   const fullContent = (incomingMessages || []).map(m => m.content || '').join('\n\n');
   const charRegex = /<([^\s>]+)'s Persona>([\s\S]*?)<\/\1's Persona>/;
   const charMatch = fullContent.match(charRegex);
-  if (charMatch) {
-    characterName = charMatch[1];
-    characterInfo = charMatch[2].trim();
-  }
+  if (charMatch) { characterName = charMatch[1]; characterInfo = charMatch[2].trim(); }
   const userRegex = /<UserPersona>([\s\S]*?)<\/UserPersona>/;
   const userMatch = fullContent.match(userRegex);
-  if (userMatch) {
-    userPersona = userMatch[1].trim();
-  }
-  chatHistory = (incomingMessages || []).filter(m => {
-    const content = m.content || '';
-    return !content.includes("'s Persona>") && !content.includes("<UserPersona>");
-  });
+  if (userMatch) { userPersona = userMatch[1].trim(); }
+  chatHistory = (incomingMessages || []).filter(m => { const content = m.content || ''; return !content.includes("'s Persona>") && !content.includes("<UserPersona>"); });
   return { characterName, characterInfo, userPersona, chatHistory };
 }
 async function buildFinalMessages(userId, incomingBody) {
     const activeSlotResult = await pool.query('SELECT active_config_slot FROM users WHERE id = $1', [userId]);
     const activeSlot = activeSlotResult.rows[0]?.active_config_slot || 1;
-    if (incomingBody && incomingBody.bypass_prompt_structure) {
-        return incomingBody.messages || [];
-    }
+    if (incomingBody && incomingBody.bypass_prompt_structure) { return incomingBody.messages || []; }
     const result = await pool.query('SELECT * FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [userId, activeSlot]);
     const userBlocks = result.rows;
     if (!userBlocks || userBlocks.length === 0) return incomingBody.messages || [];
@@ -383,55 +365,43 @@ async function buildFinalMessages(userId, incomingBody) {
             }
         }
     }
-    if (finalMessages.length === 0) {
-        return incomingBody.messages || [];
-    }
+    if (finalMessages.length === 0) { return incomingBody.messages || []; }
     return finalMessages;
 }
 
 
 // --- Proxy endpoint ---
+// ... (This section is unchanged)
 app.post('/v1/chat/completions', requireAuth, async (req, res) => {
   const reqId = crypto.randomBytes(4).toString('hex');
   console.log(`\n[${new Date().toISOString()}] --- NEW REQUEST ${reqId} ---`);
-  
   let keyToUse = null;
   try {
     const body = req.body || {};
     const model = (body.model || '').toString();
-
+    console.log(`[${reqId}] User ${req.user.id} requesting model: ${model}`);
+    console.log(`[${reqId}] RAW INCOMING MESSAGES:`, JSON.stringify(body.messages, null, 2));
     let provider = body.provider || req.headers['x-provider'];
     if (!provider) {
       if (model.toLowerCase().startsWith('gemini')) provider = 'gemini';
       else if (model.toLowerCase().startsWith('gpt')) provider = 'openai';
       else provider = 'openrouter';
     }
-
     keyToUse = await getRotatingKey(req.user.id, provider);
-    if (!keyToUse) {
-      return res.status(400).json({ error: `No active API key available for provider '${provider}'. Please add one or reactivate a rate-limited key.`});
-    }
+    if (!keyToUse) { return res.status(400).json({ error: `No active API key available for provider '${provider}'. Please add one or reactivate a rate-limited key.`}); }
     const apiKey = keyToUse.api_key;
     console.log(`[${reqId}] Using key ID: ${keyToUse.id} for provider: ${provider}`);
-
     const mergedMessages = await buildFinalMessages(req.user.id, body);
-
-    if (mergedMessages.length === 0) {
-        return res.status(500).json({ error: 'Proxy error: Failed to construct a valid prompt.' });
-    }
-
+    console.log(`[${reqId}] FINAL MESSAGES TO BE SENT (${provider}):`, JSON.stringify(mergedMessages, null, 2));
+    if (mergedMessages.length === 0) { return res.status(500).json({ error: 'Proxy error: Failed to construct a valid prompt.' }); }
     if (provider === 'gemini') {
       let systemInstructionText = '';
       const contents = [];
       mergedMessages.forEach(m => {
         const role = (m.role || 'user').toString();
-        if (role === 'system') {
-          systemInstructionText += (systemInstructionText ? '\n' : '') + (m.content || '');
-        } else if (role === 'assistant') {
-          contents.push({ role: 'model', parts: [{ text: m.content || '' }] });
-        } else {
-          contents.push({ role: 'user', parts: [{ text: m.content || '' }] });
-        }
+        if (role === 'system') { systemInstructionText += (systemInstructionText ? '\n' : '') + (m.content || ''); } 
+        else if (role === 'assistant') { contents.push({ role: 'model', parts: [{ text: m.content || '' }] }); } 
+        else { contents.push({ role: 'user', parts: [{ text: m.content || '' }] }); }
       });
       const geminiRequestBody = { contents, generation_config: { temperature: body.temperature ?? 0.2, top_k: body.top_k ?? undefined, top_p: body.top_p ?? 0.95 }, safety_settings: body.safety_settings || DEFAULT_GEMINI_SAFETY_SETTINGS };
       if (systemInstructionText) geminiRequestBody.system_instruction = { parts: [{ text: systemInstructionText }] };
@@ -475,18 +445,15 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
       const providerResp = await axios.post(forwardUrl, forwardBody, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, timeout: 120000 });
       return res.status(providerResp.status).json(providerResp.data);
     }
-
     return res.status(400).json({ error: `Unsupported provider '${provider}'.` });
   } catch (err) {
     const errorData = err.response?.data;
     const errorStatus = err.response?.status;
     const errorText = JSON.stringify(errorData);
-
     if (keyToUse && (errorStatus === 429 || (errorText && errorText.toLowerCase().includes('rate limit exceeded')))) {
         const reason = `[${errorStatus}] ${errorText}`;
         await deactivateKey(keyToUse.id, reason);
     }
-
     console.error(`[${reqId}] --- PROXY ERROR ---`, err.response?.data ?? err.message);
     const msg = err.response?.data ?? { message: err.message };
     res.status(500).json({ error: 'Proxy failed', detail: msg });
@@ -508,42 +475,49 @@ async function reactivateKeys() {
     try {
         const { rows } = await pool.query("SELECT id, provider, deactivated_at FROM api_keys WHERE is_active = FALSE AND deactivated_at IS NOT NULL");
         if (rows.length === 0) {
-            console.log('No keys to reactivate.');
+            console.log('-> No inactive keys found to check.');
             return;
         }
-
         const now = new Date();
         const nowUTC = now.toISOString().split('T')[0];
         const nowPST = new Date(now.getTime() - 8 * 60 * 60 * 1000).toISOString().split('T')[0];
-
         const keysToReactivate = [];
         for (const key of rows) {
             const deactivatedDateUTC = new Date(key.deactivated_at).toISOString().split('T')[0];
             const deactivatedDatePST = new Date(new Date(key.deactivated_at).getTime() - 8 * 60 * 60 * 1000).toISOString().split('T')[0];
-
             if (key.provider === 'gemini' && nowPST > deactivatedDatePST) {
                 keysToReactivate.push(key.id);
             } else if (key.provider === 'openrouter' && nowUTC > deactivatedDateUTC) {
                 keysToReactivate.push(key.id);
             }
         }
-
         if (keysToReactivate.length > 0) {
-            console.log(`Reactivating keys: ${keysToReactivate.join(', ')}`);
-            await pool.query(
-                'UPDATE api_keys SET is_active = TRUE, deactivated_at = NULL, deactivation_reason = NULL WHERE id = ANY($1::int[])',
-                [keysToReactivate]
-            );
+            console.log(`-> Reactivating keys: ${keysToReactivate.join(', ')}`);
+            await pool.query('UPDATE api_keys SET is_active = TRUE, deactivated_at = NULL, deactivation_reason = NULL WHERE id = ANY($1::int[])', [keysToReactivate]);
+        } else {
+            // FIX: Add a log for when keys were checked but none were ready to be reset
+            console.log('-> Checked inactive keys, but none have passed their reset time yet.');
         }
     } catch (err) {
         console.error('Error during key reactivation job:', err);
     }
 }
 
-console.log('Performing initial key reactivation check on startup...');
-reactivateKeys();
-setInterval(reactivateKeys, 60 * 60 * 1000);
-
-app.listen(PORT, () => {
-  console.log(`AI key proxy server listening on port ${PORT}`);
-});
+// FIX: Wrap startup logic in an async IIFE to ensure proper order
+(async () => {
+    try {
+        await pool.connect();
+        console.log('Successfully connected to Supabase database.');
+        
+        console.log('Performing initial key reactivation check on startup...');
+        await reactivateKeys(); // Wait for the check to complete
+        
+        setInterval(reactivateKeys, 60 * 60 * 1000); // Then schedule it
+        
+        app.listen(PORT, () => {
+          console.log(`AI key proxy server listening on port ${PORT}`);
+        });
+    } catch (err) {
+        console.error('FATAL: Database connection error. Server not started.', err.stack);
+    }
+})();
