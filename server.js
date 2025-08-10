@@ -29,6 +29,10 @@ pool.connect()
   .catch(err => console.error('Database connection error', err.stack));
 
 
+// --- Key Rotation State (In-Memory) ---
+const keyRotationState = {};
+
+
 // --- Helpers ---
 function genToken() {
   return crypto.randomBytes(32).toString('hex');
@@ -116,6 +120,8 @@ app.post('/regenerate-token', requireAuth, async (req, res) => {
   await pool.query('UPDATE users SET proxy_token = $1 WHERE id = $2', [newToken, req.user.id]);
   res.json({ proxy_token: newToken });
 });
+
+// --- Keys management ---
 app.post('/add-keys', requireAuth, async (req, res) => {
   const { provider, apiKey, name } = req.body || {};
   if (!provider || !apiKey) return res.status(400).json({ error: 'provider and apiKey required' });
@@ -123,7 +129,7 @@ app.post('/add-keys', requireAuth, async (req, res) => {
   try {
     await pool.query(
       `INSERT INTO api_keys (user_id, provider, name, api_key) VALUES ($1, $2, $3, $4)
-       ON CONFLICT (user_id, provider, name) DO UPDATE SET api_key = EXCLUDED.api_key`,
+       ON CONFLICT (user_id, provider, name) DO UPDATE SET api_key = EXCLUDED.api_key, is_active = TRUE, deactivated_at = NULL, deactivation_reason = NULL`,
       [req.user.id, provider, keyName, apiKey]
     );
     res.json({ ok: true });
@@ -132,10 +138,12 @@ app.post('/add-keys', requireAuth, async (req, res) => {
     res.status(500).json({ error: 'Failed to store key' });
   }
 });
+
 app.get('/keys', requireAuth, async (req, res) => {
-  const result = await pool.query('SELECT id, provider, name, created_at FROM api_keys WHERE user_id = $1', [req.user.id]);
+  const result = await pool.query('SELECT id, provider, name, created_at, is_active, deactivation_reason FROM api_keys WHERE user_id = $1 ORDER BY created_at DESC', [req.user.id]);
   res.json({ keys: result.rows });
 });
+
 app.delete('/keys/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
   const result = await pool.query('DELETE FROM api_keys WHERE id = $1 AND user_id = $2', [id, req.user.id]);
@@ -145,13 +153,24 @@ app.delete('/keys/:id', requireAuth, async (req, res) => {
   res.json({ ok: true });
 });
 
+app.post('/api/keys/:id/reactivate', requireAuth, async (req, res) => {
+    const id = req.params.id;
+    const result = await pool.query(
+        'UPDATE api_keys SET is_active = TRUE, deactivated_at = NULL, deactivation_reason = NULL WHERE id = $1 AND user_id = $2',
+        [id, req.user.id]
+    );
+    if (result.rowCount === 0) {
+        return res.status(404).json({ error: 'Key not found or does not belong to user.' });
+    }
+    res.json({ ok: true });
+});
+
 
 // --- Config Management Endpoints ---
 app.get('/api/configs/meta', requireAuth, async (req, res) => {
     const result = await pool.query('SELECT config_name_1, config_name_2, config_name_3, active_config_slot FROM users WHERE id = $1', [req.user.id]);
     res.json(result.rows[0]);
 });
-
 app.put('/api/configs/meta', requireAuth, async (req, res) => {
     const { names } = req.body;
     if (!Array.isArray(names) || names.length !== 3) {
@@ -160,7 +179,6 @@ app.put('/api/configs/meta', requireAuth, async (req, res) => {
     await pool.query('UPDATE users SET config_name_1 = $1, config_name_2 = $2, config_name_3 = $3 WHERE id = $4', [names[0], names[1], names[2], req.user.id]);
     res.json({ ok: true });
 });
-
 app.get('/api/configs/active', requireAuth, async (req, res) => {
     const result = await pool.query('SELECT active_config_slot FROM users WHERE id = $1', [req.user.id]);
     res.json(result.rows[0]);
@@ -173,63 +191,41 @@ app.put('/api/configs/active', requireAuth, async (req, res) => {
     await pool.query('UPDATE users SET active_config_slot = $1 WHERE id = $2', [slot, req.user.id]);
     res.json({ ok: true });
 });
-
 app.get('/api/configs/export', requireAuth, async (req, res) => {
     const slot = parseInt(req.query.slot, 10);
     if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
-
     const userResult = await pool.query(`SELECT config_name_${slot} as name FROM users WHERE id = $1`, [req.user.id]);
     const configName = userResult.rows[0]?.name || `Config ${slot}`;
-
     const blocksResult = await pool.query('SELECT name, role, content FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
-    
-    const exportData = {
-        configName,
-        blocks: blocksResult.rows.map(b => ({ name: b.name, role: b.role, content: b.content }))
-    };
-
+    const exportData = { configName, blocks: blocksResult.rows.map(b => ({ name: b.name, role: b.role, content: b.content })) };
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', `attachment; filename="${configName.replace(/ /g, '_')}.json"`);
     res.send(JSON.stringify(exportData, null, 2));
 });
-
 app.post('/api/configs/import', requireAuth, async (req, res) => {
     const slot = parseInt(req.query.slot, 10);
     if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
     if (!req.files || Object.keys(req.files).length === 0) {
         return res.status(400).json({ error: 'No file uploaded.' });
     }
-
     const client = await pool.connect();
     try {
         const file = req.files.configFile;
         const importData = JSON.parse(file.data.toString('utf8'));
-
-        if (!importData.configName || !Array.isArray(importData.blocks)) {
-            throw new Error('Invalid JSON format');
-        }
-        
+        if (!importData.configName || !Array.isArray(importData.blocks)) { throw new Error('Invalid JSON format'); }
         const fullImportedContent = importData.blocks.map(b => b.content || '').join('');
         if (!fullImportedContent.includes('<<PARSED_CHARACTER_INFO>>') || !fullImportedContent.includes('<<PARSED_USER_PERSONA>>') || !fullImportedContent.includes('<<PARSED_CHAT_HISTORY>>')) {
-            throw new Error('Imported config is invalid. It must contain all three placeholders: <<PARSED_CHARACTER_INFO>>, <<PARSED_USER_PERSONA>>, and <<PARSED_CHAT_HISTORY>>.');
+            throw new Error('Imported config is invalid. It must contain all three placeholders.');
         }
-
         await client.query('BEGIN');
-
         await client.query('DELETE FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2', [req.user.id, slot]);
         await client.query(`UPDATE users SET config_name_${slot} = $1 WHERE id = $2`, [importData.configName, req.user.id]);
-
         for (let i = 0; i < importData.blocks.length; i++) {
             const block = importData.blocks[i];
-            await client.query(
-                'INSERT INTO prompt_blocks (user_id, config_slot, name, role, content, position) VALUES ($1, $2, $3, $4, $5, $6)',
-                [req.user.id, slot, block.name, block.role, block.content, i]
-            );
+            await client.query('INSERT INTO prompt_blocks (user_id, config_slot, name, role, content, position) VALUES ($1, $2, $3, $4, $5, $6)', [req.user.id, slot, block.name, block.role, block.content, i]);
         }
-
         await client.query('COMMIT');
         res.json({ ok: true, newName: importData.configName });
-
     } catch (err) {
         await client.query('ROLLBACK');
         console.error("Import error:", err);
@@ -238,16 +234,12 @@ app.post('/api/configs/import', requireAuth, async (req, res) => {
         client.release();
     }
 });
-
-
-// --- Prompt blocks (config) endpoints ---
 app.get('/api/config', requireAuth, async (req, res) => {
   const slot = parseInt(req.query.slot, 10) || 1;
   if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
   const result = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
   res.json({ blocks: result.rows });
 });
-
 app.post('/api/config', requireAuth, async (req, res) => {
   const slot = parseInt(req.query.slot, 10) || 1;
   if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
@@ -255,30 +247,25 @@ app.post('/api/config', requireAuth, async (req, res) => {
   if (!name || !role) return res.status(400).json({ error: 'name and role required' });
   const maxRow = await pool.query('SELECT MAX(position) as mx FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2', [req.user.id, slot]);
   const nextPos = (maxRow.rows[0]?.mx ?? -1) + 1;
-  await pool.query('INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)',
-    [req.user.id, name, role, content || '', nextPos, slot]);
+  await pool.query('INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)', [req.user.id, name, role, content || '', nextPos, slot]);
   const blocks = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
   res.json({ blocks: blocks.rows });
 });
-
 app.put('/api/config/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
   const { name, role, content } = req.body || {};
   const blockCheck = await pool.query('SELECT * FROM prompt_blocks WHERE id = $1 AND user_id = $2', [id, req.user.id]);
   const row = blockCheck.rows[0];
   if (!row) return res.status(404).json({ error: 'not found' });
-  
   await pool.query('UPDATE prompt_blocks SET name = $1, role = $2, content = $3 WHERE id = $4', [name || row.name, role || row.role, content ?? row.content, id]);
   const blocks = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, row.config_slot]);
   res.json({ blocks: blocks.rows });
 });
-
 app.delete('/api/config/:id', requireAuth, async (req, res) => {
   const id = req.params.id;
   const blockCheck = await pool.query('SELECT * FROM prompt_blocks WHERE id = $1 AND user_id = $2', [id, req.user.id]);
   const row = blockCheck.rows[0];
   if (!row) return res.status(404).json({ error: 'not found' });
-  
   await pool.query('DELETE FROM prompt_blocks WHERE id = $1', [id]);
   const remaining = await pool.query('SELECT id FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, row.config_slot]);
   for (let i = 0; i < remaining.rows.length; i++) {
@@ -287,13 +274,11 @@ app.delete('/api/config/:id', requireAuth, async (req, res) => {
   const blocks = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, row.config_slot]);
   res.json({ blocks: blocks.rows });
 });
-
 app.post('/api/config/reorder', requireAuth, async (req, res) => {
   const slot = parseInt(req.query.slot, 10) || 1;
   if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
   const { order } = req.body || {};
   if (!Array.isArray(order)) return res.status(400).json({ error: 'order array required' });
-  
   for (let i = 0; i < order.length; i++) {
     const id = order[i];
     await pool.query('UPDATE prompt_blocks SET position = $1 WHERE id = $2 AND user_id = $3 AND config_slot = $4', [i, id, req.user.id, slot]);
@@ -302,108 +287,92 @@ app.post('/api/config/reorder', requireAuth, async (req, res) => {
   res.json({ blocks: blocks.rows });
 });
 
-async function getUserKeyForProvider(userId, provider) {
-  const res = await pool.query('SELECT * FROM api_keys WHERE user_id = $1 AND provider = $2 ORDER BY created_at DESC LIMIT 1', [userId, provider]);
-  return res.rows[0];
+
+// --- PROMPT PARSING AND BUILDING LOGIC ---
+async function getRotatingKey(userId, provider) {
+    const res = await pool.query('SELECT * FROM api_keys WHERE user_id = $1 AND provider = $2 AND is_active = TRUE ORDER BY id', [userId, provider]);
+    const activeKeys = res.rows;
+    if (activeKeys.length === 0) return null;
+    if (!keyRotationState[userId]) keyRotationState[userId] = {};
+    if (keyRotationState[userId][provider] === undefined) keyRotationState[userId][provider] = 0;
+    const currentIndex = keyRotationState[userId][provider];
+    const selectedKey = activeKeys[currentIndex];
+    keyRotationState[userId][provider] = (currentIndex + 1) % activeKeys.length;
+    return selectedKey;
 }
 
-// --- PROMPT PARSING AND BUILDING LOGIC (REWRITTEN) ---
+async function deactivateKey(keyId, reason) {
+    console.log(`Deactivating key ${keyId} due to: ${reason}`);
+    await pool.query(
+        'UPDATE api_keys SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = $1 WHERE id = $2',
+        [reason, keyId]
+    );
+}
+
 async function parseJanitorInput(incomingMessages) {
   let characterName = 'Character';
   let characterInfo = '';
   let userPersona = '';
   let chatHistory = [];
-
   const fullContent = (incomingMessages || []).map(m => m.content || '').join('\n\n');
-
   const charRegex = /<([^\s>]+)'s Persona>([\s\S]*?)<\/\1's Persona>/;
   const charMatch = fullContent.match(charRegex);
   if (charMatch) {
     characterName = charMatch[1];
     characterInfo = charMatch[2].trim();
   }
-
   const userRegex = /<UserPersona>([\s\S]*?)<\/UserPersona>/;
   const userMatch = fullContent.match(userRegex);
   if (userMatch) {
     userPersona = userMatch[1].trim();
   }
-
   chatHistory = (incomingMessages || []).filter(m => {
     const content = m.content || '';
     return !content.includes("'s Persona>") && !content.includes("<UserPersona>");
   });
-
   return { characterName, characterInfo, userPersona, chatHistory };
 }
 
 async function buildFinalMessages(userId, incomingBody) {
     const activeSlotResult = await pool.query('SELECT active_config_slot FROM users WHERE id = $1', [userId]);
     const activeSlot = activeSlotResult.rows[0]?.active_config_slot || 1;
-
     if (incomingBody && incomingBody.bypass_prompt_structure) {
         return incomingBody.messages || [];
     }
-
     const result = await pool.query('SELECT * FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [userId, activeSlot]);
     const userBlocks = result.rows;
     if (!userBlocks || userBlocks.length === 0) return incomingBody.messages || [];
-
     const fullConfigContent = userBlocks.map(b => b.content || '').join('');
     if (!fullConfigContent.includes('<<PARSED_CHARACTER_INFO>>') || !fullConfigContent.includes('<<PARSED_USER_PERSONA>>') || !fullConfigContent.includes('<<PARSED_CHAT_HISTORY>>')) {
         throw new Error('Your active proxy configuration is invalid. It must contain all three placeholders. Please edit it in /config.');
     }
-
     const { characterName, characterInfo, userPersona, chatHistory } = await parseJanitorInput(incomingBody.messages);
-    
     const finalMessages = [];
     for (const block of userBlocks) {
         let currentContent = block.content || '';
-        
-        // This is the special case for the chat history, which is an ARRAY.
-        // It must be handled by splitting the block.
         if (currentContent.includes('<<PARSED_CHAT_HISTORY>>')) {
             const parts = currentContent.split('<<PARSED_CHAT_HISTORY>>');
             const beforeText = parts[0];
             const afterText = parts[1];
-
-            // Add a message for any text BEFORE the placeholder
             if (beforeText.trim()) {
-                let processedBeforeText = beforeText.replace(/{{char}}/g, characterName);
-                processedBeforeText = processedBeforeText.replace(/<<PARSED_CHARACTER_INFO>>/g, characterInfo);
-                processedBeforeText = processedBeforeText.replace(/<<PARSED_USER_PERSONA>>/g, userPersona);
+                let processedBeforeText = beforeText.replace(/{{char}}/g, characterName).replace(/<<PARSED_CHARACTER_INFO>>/g, characterInfo).replace(/<<PARSED_USER_PERSONA>>/g, userPersona);
                 finalMessages.push({ role: block.role, content: processedBeforeText });
             }
-            
-            // Spread the actual array of chat history messages
             finalMessages.push(...chatHistory);
-
-            // Add a message for any text AFTER the placeholder
             if (afterText.trim()) {
-                let processedAfterText = afterText.replace(/{{char}}/g, characterName);
-                processedAfterText = processedAfterText.replace(/<<PARSED_CHARACTER_INFO>>/g, characterInfo);
-                processedAfterText = processedAfterText.replace(/<<PARSED_USER_PERSONA>>/g, userPersona);
+                let processedAfterText = afterText.replace(/{{char}}/g, characterName).replace(/<<PARSED_CHARACTER_INFO>>/g, characterInfo).replace(/<<PARSED_USER_PERSONA>>/g, userPersona);
                 finalMessages.push({ role: block.role, content: processedAfterText });
             }
         } else {
-            // This is the normal case for simple STRING placeholders.
-            // We perform a direct find-and-replace within the content.
-            currentContent = currentContent.replace(/{{char}}/g, characterName);
-            currentContent = currentContent.replace(/<<PARSED_CHARACTER_INFO>>/g, characterInfo);
-            currentContent = currentContent.replace(/<<PARSED_USER_PERSONA>>/g, userPersona);
-            
-            // Only add the block if it's not empty after replacements
+            currentContent = currentContent.replace(/{{char}}/g, characterName).replace(/<<PARSED_CHARACTER_INFO>>/g, characterInfo).replace(/<<PARSED_USER_PERSONA>>/g, userPersona);
             if (currentContent.trim()) {
                 finalMessages.push({ role: block.role, content: currentContent });
             }
         }
     }
-
     if (finalMessages.length === 0) {
-        console.log('[WARNING] buildFinalMessages resulted in an empty array. Falling back to original messages.');
         return incomingBody.messages || [];
     }
-
     return finalMessages;
 }
 
@@ -413,12 +382,10 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
   const reqId = crypto.randomBytes(4).toString('hex');
   console.log(`\n[${new Date().toISOString()}] --- NEW REQUEST ${reqId} ---`);
   
+  let keyToUse = null;
   try {
     const body = req.body || {};
     const model = (body.model || '').toString();
-
-    console.log(`[${reqId}] User ${req.user.id} requesting model: ${model}`);
-    console.log(`[${reqId}] RAW INCOMING MESSAGES:`, JSON.stringify(body.messages, null, 2));
 
     let provider = body.provider || req.headers['x-provider'];
     if (!provider) {
@@ -427,21 +394,19 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
       else provider = 'openrouter';
     }
 
-    const keyRow = await getUserKeyForProvider(req.user.id, provider);
-    if (!keyRow) {
-      return res.status(400).json({ error: `No API key stored for provider '${provider}'. Add it at /add-keys.`});
+    keyToUse = await getRotatingKey(req.user.id, provider);
+    if (!keyToUse) {
+      return res.status(400).json({ error: `No active API key available for provider '${provider}'. Please add one or reactivate a rate-limited key.`});
     }
-    const apiKey = keyRow.api_key;
+    const apiKey = keyToUse.api_key;
+    console.log(`[${reqId}] Using key ID: ${keyToUse.id} for provider: ${provider}`);
 
     const mergedMessages = await buildFinalMessages(req.user.id, body);
 
-    console.log(`[${reqId}] FINAL MESSAGES TO BE SENT (${provider}):`, JSON.stringify(mergedMessages, null, 2));
     if (mergedMessages.length === 0) {
-        console.error(`[${reqId}] CRITICAL: Final message array is empty. Aborting call to AI provider.`);
         return res.status(500).json({ error: 'Proxy error: Failed to construct a valid prompt.' });
     }
 
-    // ... (rest of provider handling is unchanged)
     if (provider === 'gemini') {
       let systemInstructionText = '';
       const contents = [];
@@ -460,10 +425,7 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
       if (body.stream) {
         const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?key=${encodeURIComponent(apiKey)}`;
         const providerResp = await axios.post(url, geminiRequestBody, { headers: { 'Content-Type': 'application/json' }, responseType: 'stream', timeout: 120000 });
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
-        res.flushHeaders && res.flushHeaders();
+        res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('Connection', 'keep-alive'); res.flushHeaders && res.flushHeaders();
         providerResp.data.on('data', (chunk) => {
           const str = chunk.toString();
           const lines = str.split('\n').map(l => l.trim()).filter(Boolean);
@@ -493,9 +455,7 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
       const forwardUrl = provider === 'openrouter' ? 'https://openrouter.ai/api/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
       if (forwardBody.stream) {
         const resp = await axios.post(forwardUrl, forwardBody, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, responseType: 'stream', timeout: 120000 });
-        res.setHeader('Content-Type', 'text/event-stream');
-        res.setHeader('Cache-Control', 'no-cache');
-        res.setHeader('Connection', 'keep-alive');
+        res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('Connection', 'keep-alive');
         resp.data.pipe(res);
         return;
       }
@@ -505,6 +465,15 @@ app.post('/v1/chat/completions', requireAuth, async (req, res) => {
 
     return res.status(400).json({ error: `Unsupported provider '${provider}'.` });
   } catch (err) {
+    const errorData = err.response?.data;
+    const errorStatus = err.response?.status;
+    const errorText = JSON.stringify(errorData);
+
+    if (keyToUse && (errorStatus === 429 || (errorText && errorText.toLowerCase().includes('rate limit exceeded')))) {
+        const reason = `[${errorStatus}] ${errorText}`;
+        await deactivateKey(keyToUse.id, reason);
+    }
+
     console.error(`[${reqId}] --- PROXY ERROR ---`, err.response?.data ?? err.message);
     const msg = err.response?.data ?? { message: err.message };
     res.status(500).json({ error: 'Proxy failed', detail: msg });
@@ -519,6 +488,49 @@ app.get('/', (req, res) => {
 app.get('/config', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'config.html'));
 });
+
+// --- Automatic Key Reactivation Job ---
+async function reactivateKeys() {
+    console.log('Running key reactivation check...');
+    try {
+        const { rows } = await pool.query("SELECT id, provider, deactivated_at FROM api_keys WHERE is_active = FALSE AND deactivated_at IS NOT NULL");
+        if (rows.length === 0) {
+            console.log('No keys to reactivate.');
+            return;
+        }
+
+        const now = new Date();
+        const nowUTC = now.toISOString().split('T')[0];
+        const nowPST = new Date(now.getTime() - 8 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+        const keysToReactivate = [];
+        for (const key of rows) {
+            const deactivatedDateUTC = new Date(key.deactivated_at).toISOString().split('T')[0];
+            const deactivatedDatePST = new Date(new Date(key.deactivated_at).getTime() - 8 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+            if (key.provider === 'gemini' && nowPST > deactivatedDatePST) {
+                keysToReactivate.push(key.id);
+            } else if (key.provider === 'openrouter' && nowUTC > deactivatedDateUTC) {
+                keysToReactivate.push(key.id);
+            }
+        }
+
+        if (keysToReactivate.length > 0) {
+            console.log(`Reactivating keys: ${keysToReactivate.join(', ')}`);
+            await pool.query(
+                'UPDATE api_keys SET is_active = TRUE, deactivated_at = NULL, deactivation_reason = NULL WHERE id = ANY($1::int[])',
+                [keysToReactivate]
+            );
+        }
+    } catch (err) {
+        console.error('Error during key reactivation job:', err);
+    }
+}
+
+// FIX: Run the job once on startup, then schedule it
+console.log('Performing initial key reactivation check on startup...');
+reactivateKeys();
+setInterval(reactivateKeys, 60 * 60 * 1000); // 1 hour
 
 app.listen(PORT, () => {
   console.log(`AI key proxy server listening on port ${PORT}`);

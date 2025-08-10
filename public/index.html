@@ -5,6 +5,17 @@
   <title>AI Key Proxy</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="/style.css" />
+  <style>
+    .key-item.deactivated {
+      opacity: 0.5;
+      background-color: #fff5f5;
+    }
+    .reactivate-btn {
+      background-color: #28a745;
+      color: white;
+      margin-left: 10px;
+    }
+  </style>
 </head>
 <body>
   <main class="container">
@@ -48,7 +59,7 @@
 
       <hr />
       <h3>Prompt Structure</h3>
-      <p>Arrange and edit your prompt blocks for the proxy. The default block <strong>JanitorAI Default (Cannot change)</strong> is the placeholder where external apps will have their input inserted.</p>
+      <p>Manage your prompt configurations. The active config will be used for all proxy requests.</p>
       <button id="btnManagePrompts">Manage Prompt Structure (/config)</button>
 
       <hr />

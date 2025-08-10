@@ -19,24 +19,48 @@ function showDashboard() {
   $('exampleCurl').textContent = `curl "http://localhost:3000/v1/chat/completions" \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer ${proxyToken}" \\
-  -d '{ "model":"gemini-2.0-flash", "messages":[{"role":"user","content":"Explain to me how AI works"}] }'`;
+  -d '{ "model":"gemini-pro", "messages":[{"role":"user","content":"Explain to me how AI works"}] }'`;
   loadKeys();
 }
 
 async function loadKeys() {
   try {
     const data = await api('/keys');
-    const list = data.keys.map(k => `<div class="key-item">
-      <strong>${k.provider}</strong> (${k.name || '-'}) — ${new Date(k.created_at).toLocaleString()}
-      <button data-id="${k.id}" class="del-btn">Delete</button>
-    </div>`).join('');
+    const list = data.keys.map(k => `
+      <div class="key-item ${!k.is_active ? 'deactivated' : ''}">
+        <div>
+          <strong>${k.provider}</strong> (${k.name || '-'}) — ${new Date(k.created_at).toLocaleString()}
+          ${!k.is_active ? '<span> ⚠️ Rate-Limited</span>' : ''}
+        </div>
+        <div>
+          <button data-id="${k.id}" class="del-btn">Delete</button>
+          ${!k.is_active ? `<button data-id="${k.id}" data-reason="${k.deactivation_reason || 'No reason specified.'}" class="reactivate-btn">Reactivate</button>` : ''}
+        </div>
+      </div>`).join('');
     $('keysList').innerHTML = list || '<i>No keys yet</i>';
+    
+    // Attach delete listeners
     document.querySelectorAll('.del-btn').forEach(b => b.onclick = async (ev) => {
       const id = ev.target.dataset.id;
       if (!confirm('Delete key?')) return;
       await api('/keys/' + id, { method: 'DELETE' });
       loadKeys();
     });
+
+    // Attach reactivate listeners
+    document.querySelectorAll('.reactivate-btn').forEach(b => b.onclick = async (ev) => {
+        const id = ev.target.dataset.id;
+        const reason = ev.target.dataset.reason;
+        if (confirm(`This key was deactivated due to the following error:\n\n${reason}\n\nDo you want to reactivate it now?`)) {
+            try {
+                await api(`/api/keys/${id}/reactivate`, { method: 'POST' });
+                loadKeys();
+            } catch (err) {
+                alert('Failed to reactivate key: ' + JSON.stringify(err));
+            }
+        }
+    });
+
   } catch (err) {
     console.error(err);
     $('keysList').innerHTML = `<pre>${JSON.stringify(err, null, 2)}</pre>`;
