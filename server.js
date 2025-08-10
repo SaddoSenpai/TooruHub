@@ -110,7 +110,6 @@ app.post('/regenerate-token', requireAuth, async (req, res) => {
 });
 
 // --- Keys management ---
-// ... (This section is unchanged)
 app.post('/add-keys', requireAuth, async (req, res) => {
   const { provider, apiKey, name } = req.body || {};
   if (!provider || !apiKey) return res.status(400).json({ error: 'provider and apiKey required' });
@@ -146,7 +145,12 @@ app.post('/api/keys/:id/reactivate', requireAuth, async (req, res) => {
 app.post('/api/keys/:id/deactivate', requireAuth, async (req, res) => {
     const id = req.params.id;
     const { reason } = req.body;
-    const result = await pool.query('UPDATE api_keys SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = $1 WHERE id = $2 AND user_id = $3', [reason || 'Manually deactivated by user.', id, req.user.id]);
+    // FIX: Add a prefix to distinguish manual deactivations
+    const finalReason = `[Manual] ${reason || 'Deactivated by user.'}`;
+    const result = await pool.query(
+        'UPDATE api_keys SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = $1 WHERE id = $2 AND user_id = $3',
+        [finalReason, id, req.user.id]
+    );
     if (result.rowCount === 0) { return res.status(404).json({ error: 'Key not found or does not belong to user.' }); }
     res.json({ ok: true });
 });
@@ -159,7 +163,7 @@ app.post('/api/keys/:id/test', requireAuth, async (req, res) => {
         const { provider, api_key } = keyToTest;
         let testPayload, testUrl, headers;
         if (provider === 'gemini') {
-            testUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${api_key}`;
+            testUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${api_key}`;
             testPayload = { contents: [{ parts: [{ text: "hello" }] }] };
             headers = { 'Content-Type': 'application/json' };
         } else if (provider === 'openai') {
@@ -473,46 +477,58 @@ app.get('/config', (req, res) => {
 async function reactivateKeys() {
     console.log('Running key reactivation check...');
     try {
-        const { rows } = await pool.query("SELECT id, provider, deactivated_at FROM api_keys WHERE is_active = FALSE AND deactivated_at IS NOT NULL");
+        // FIX: Select the reason to check if it was manual
+        const { rows } = await pool.query("SELECT id, provider, deactivated_at, deactivation_reason FROM api_keys WHERE is_active = FALSE AND deactivated_at IS NOT NULL");
+        
         if (rows.length === 0) {
             console.log('-> No inactive keys found to check.');
             return;
         }
+
         const now = new Date();
         const nowUTC = now.toISOString().split('T')[0];
         const nowPST = new Date(now.getTime() - 8 * 60 * 60 * 1000).toISOString().split('T')[0];
+
         const keysToReactivate = [];
         for (const key of rows) {
+            // FIX: Skip any key that was manually deactivated
+            if (key.deactivation_reason && key.deactivation_reason.startsWith('[Manual]')) {
+                continue;
+            }
+
             const deactivatedDateUTC = new Date(key.deactivated_at).toISOString().split('T')[0];
             const deactivatedDatePST = new Date(new Date(key.deactivated_at).getTime() - 8 * 60 * 60 * 1000).toISOString().split('T')[0];
+
             if (key.provider === 'gemini' && nowPST > deactivatedDatePST) {
                 keysToReactivate.push(key.id);
             } else if (key.provider === 'openrouter' && nowUTC > deactivatedDateUTC) {
                 keysToReactivate.push(key.id);
             }
         }
+
         if (keysToReactivate.length > 0) {
             console.log(`-> Reactivating keys: ${keysToReactivate.join(', ')}`);
-            await pool.query('UPDATE api_keys SET is_active = TRUE, deactivated_at = NULL, deactivation_reason = NULL WHERE id = ANY($1::int[])', [keysToReactivate]);
+            await pool.query(
+                'UPDATE api_keys SET is_active = TRUE, deactivated_at = NULL, deactivation_reason = NULL WHERE id = ANY($1::int[])',
+                [keysToReactivate]
+            );
         } else {
-            // FIX: Add a log for when keys were checked but none were ready to be reset
-            console.log('-> Checked inactive keys, but none have passed their reset time yet.');
+            console.log('-> Checked inactive keys, but none were eligible for automatic reactivation.');
         }
     } catch (err) {
         console.error('Error during key reactivation job:', err);
     }
 }
 
-// FIX: Wrap startup logic in an async IIFE to ensure proper order
 (async () => {
     try {
         await pool.connect();
         console.log('Successfully connected to Supabase database.');
         
         console.log('Performing initial key reactivation check on startup...');
-        await reactivateKeys(); // Wait for the check to complete
+        await reactivateKeys();
         
-        setInterval(reactivateKeys, 60 * 60 * 1000); // Then schedule it
+        setInterval(reactivateKeys, 60 * 60 * 1000);
         
         app.listen(PORT, () => {
           console.log(`AI key proxy server listening on port ${PORT}`);
