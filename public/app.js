@@ -28,17 +28,18 @@ async function loadKeys() {
     const data = await api('/keys');
     const list = data.keys.map(k => `
       <div class="key-item ${!k.is_active ? 'deactivated' : ''}">
-        <div>
-          <strong>${k.provider}</strong> (${k.name || '-'}) — ${new Date(k.created_at).toLocaleString()}
+        <div class="key-info">
+          <strong>${k.provider}</strong> (${k.name || '-'})
+          <div class="muted">Added: ${new Date(k.created_at).toLocaleString()}</div>
           ${!k.is_active ? '<span> ⚠️ Rate-Limited / Inactive</span>' : ''}
         </div>
-        <div>
+        <div class="key-actions">
           <button data-id="${k.id}" class="test-btn">Test</button>
-          <button data-id="${k.id}" class="del-btn">Delete</button>
           ${k.is_active 
             ? `<button data-id="${k.id}" class="deactivate-btn">Deactivate</button>`
             : `<button data-id="${k.id}" data-reason="${k.deactivation_reason || 'No reason specified.'}" class="reactivate-btn">Reactivate</button>`
           }
+          <button data-id="${k.id}" class="del-btn">Delete</button>
         </div>
       </div>`).join('');
     $('keysList').innerHTML = list || '<i>No keys yet</i>';
@@ -75,7 +76,6 @@ async function loadKeys() {
         }
     });
 
-    // NEW: Attach test listeners
     document.querySelectorAll('.test-btn').forEach(b => b.onclick = async (ev) => {
         const btn = ev.target;
         const id = btn.dataset.id;
@@ -88,10 +88,9 @@ async function loadKeys() {
             await api(`/api/keys/${id}/test`, { method: 'POST' });
             btn.textContent = 'Key is working';
             btn.classList.add('tested-ok');
-            // Keep it disabled after a successful test to show the result
         } catch (err) {
             alert('Key test failed:\n\n' + (err.detail ? JSON.stringify(err.detail, null, 2) : JSON.stringify(err)));
-            btn.textContent = 'Test'; // Reset on failure
+            btn.textContent = 'Test';
             btn.disabled = false;
         }
     });

@@ -5,26 +5,6 @@
   <title>AI Key Proxy</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="/style.css" />
-  <style>
-    .key-item.deactivated {
-      opacity: 0.5;
-      background-color: #fff5f5;
-    }
-    .reactivate-btn {
-      background-color: #28a745;
-      color: white;
-      margin-left: 10px;
-    }
-    .deactivate-btn {
-      background-color: #6c757d;
-      color: white;
-      margin-left: 10px;
-    }
-    .test-btn.tested-ok {
-      background-color: #28a745;
-      color: white;
-    }
-  </style>
 </head>
 <body>
   <main class="container">
@@ -54,14 +34,16 @@
 
       <hr />
       <h3>Add / Update API Key</h3>
-      <select id="providerSelect">
-        <option value="gemini">gemini</option>
-        <option value="openrouter">openrouter</option>
-        <option value="openai">openai</option>
-      </select>
-      <input id="keyName" placeholder="name (optional)" />
-      <input id="apiKey" placeholder="API key" />
-      <button id="btnAddKey">Save key</button>
+      <div class="form-grid">
+        <select id="providerSelect">
+          <option value="gemini">gemini</option>
+          <option value="openrouter">openrouter</option>
+          <option value="openai">openai</option>
+        </select>
+        <input id="keyName" placeholder="name (optional)" />
+        <input id="apiKey" placeholder="API key" />
+        <button id="btnAddKey">Save key</button>
+      </div>
 
       <h3>Your stored keys</h3>
       <div id="keysList">Loading...</div>
