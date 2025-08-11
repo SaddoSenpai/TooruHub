@@ -1,6 +1,7 @@
 // services/promptService.js
 const pool = require('../config/db');
 
+// ... (DEFAULT_GEMINI_SAFETY_SETTINGS and parseJanitorInput are unchanged) ...
 const DEFAULT_GEMINI_SAFETY_SETTINGS = [
   { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
   { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
@@ -11,8 +12,8 @@ const DEFAULT_GEMINI_SAFETY_SETTINGS = [
 async function parseJanitorInput(incomingMessages) {
   let characterName = 'Character';
   let characterInfo = '';
-  let userInfo = ''; // Renamed from userPersona
-  let scenarioInfo = ''; // Renamed from scenario
+  let userInfo = '';
+  let scenarioInfo = '';
   let chatHistory = [];
   const fullContent = (incomingMessages || []).map(m => m.content || '').join('\n\n');
   
@@ -43,6 +44,7 @@ async function parseJanitorInput(incomingMessages) {
   return { characterName, characterInfo, userInfo, scenarioInfo, chatHistory };
 }
 
+
 async function buildFinalMessages(userId, incomingBody) {
     const activeSlotResult = await pool.query('SELECT active_config_slot FROM users WHERE id = $1', [userId]);
     const activeSlot = activeSlotResult.rows[0]?.active_config_slot || 1;
@@ -52,13 +54,17 @@ async function buildFinalMessages(userId, incomingBody) {
     }
 
     const result = await pool.query('SELECT * FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [userId, activeSlot]);
-    const userBlocks = result.rows;
+    
+    // --- NEW: Filter for active blocks only ---
+    const allUserBlocks = result.rows;
+    const activeUserBlocks = allUserBlocks.filter(b => b.is_active);
 
-    if (!userBlocks || userBlocks.length === 0) {
+    if (!activeUserBlocks || activeUserBlocks.length === 0) {
         return incomingBody.messages || [];
     }
 
-    const fullConfigContent = userBlocks.map(b => b.content || '').join('');
+    // --- VALIDATION: Check against ALL blocks to ensure placeholders aren't permanently deactivated ---
+    const fullConfigContent = allUserBlocks.map(b => b.content || '').join('');
     if (!fullConfigContent.includes('<<CHARACTER_INFO>>') || !fullConfigContent.includes('<<SCENARIO_INFO>>') || !fullConfigContent.includes('<<USER_INFO>>') || !fullConfigContent.includes('<<CHAT_HISTORY>>')) {
         throw new Error('Your active proxy configuration is invalid. It must contain all four placeholders. Please edit it in /config.');
     }
@@ -66,9 +72,9 @@ async function buildFinalMessages(userId, incomingBody) {
     const { characterName, characterInfo, userInfo, scenarioInfo, chatHistory } = await parseJanitorInput(incomingBody.messages);
     const finalMessages = [];
 
-    for (const block of userBlocks) {
+    // --- Use the filtered activeUserBlocks to build the prompt ---
+    for (const block of activeUserBlocks) {
         let currentContent = block.content || '';
-        // Define a replacer function for clarity
         const replacer = (text) => text
             .replace(/{{char}}/g, characterName)
             .replace(/<<CHARACTER_INFO>>/g, characterInfo)

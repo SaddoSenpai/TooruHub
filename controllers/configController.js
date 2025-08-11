@@ -1,7 +1,7 @@
 // controllers/configController.js
 const pool = require('../config/db');
 
-// ... (getConfigMeta, updateConfigMeta, getActiveConfig, setActiveConfig, exportConfig, importConfig are unchanged) ...
+// ... (meta, active, export, import functions are unchanged) ...
 exports.getConfigMeta = async (req, res) => {
     const result = await pool.query('SELECT config_name_1, config_name_2, config_name_3, active_config_slot FROM users WHERE id = $1', [req.user.id]);
     res.json(result.rows[0]);
@@ -33,8 +33,9 @@ exports.exportConfig = async (req, res) => {
     const userResult = await pool.query(`SELECT config_name_${slot} as name FROM users WHERE id = $1`, [req.user.id]);
     const configName = userResult.rows[0]?.name || `Config ${slot}`;
     
-    const blocksResult = await pool.query('SELECT name, role, content FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
-    const exportData = { configName, blocks: blocksResult.rows.map(b => ({ name: b.name, role: b.role, content: b.content })) };
+    // Include is_active in the export
+    const blocksResult = await pool.query('SELECT name, role, content, is_active FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
+    const exportData = { configName, blocks: blocksResult.rows.map(b => ({ name: b.name, role: b.role, content: b.content, is_active: b.is_active })) };
     
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', `attachment; filename="${configName.replace(/ /g, '_')}.json"`);
@@ -62,7 +63,9 @@ exports.importConfig = async (req, res) => {
         await client.query(`UPDATE users SET config_name_${slot} = $1 WHERE id = $2`, [importData.configName, req.user.id]);
         for (let i = 0; i < importData.blocks.length; i++) {
             const block = importData.blocks[i];
-            await client.query('INSERT INTO prompt_blocks (user_id, config_slot, name, role, content, position) VALUES ($1, $2, $3, $4, $5, $6)', [req.user.id, slot, block.name, block.role, block.content, i]);
+            // Handle is_active on import, defaulting to true if not present
+            const isActive = block.is_active === false ? false : true;
+            await client.query('INSERT INTO prompt_blocks (user_id, config_slot, name, role, content, position, is_active) VALUES ($1, $2, $3, $4, $5, $6, $7)', [req.user.id, slot, block.name, block.role, block.content, i, isActive]);
         }
         await client.query('COMMIT');
         res.json({ ok: true, newName: importData.configName });
@@ -81,7 +84,8 @@ exports.importConfig = async (req, res) => {
 exports.getBlocks = async (req, res) => {
   const slot = parseInt(req.query.slot, 10) || 1;
   if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
-  const result = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
+  // Select the new is_active column
+  const result = await pool.query('SELECT id, name, role, content, position, is_active FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
   res.json({ blocks: result.rows });
 };
 
@@ -95,24 +99,21 @@ exports.updateSlotConfiguration = async (req, res) => {
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-
-        // First, delete all existing blocks for this user and slot
         await client.query('DELETE FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2', [req.user.id, slot]);
 
-        // Then, insert the new set of blocks
         for (let i = 0; i < blocks.length; i++) {
             const block = blocks[i];
-            // The new blocks from the frontend won't have a real DB id, so we use their content
+            // Ensure is_active is a boolean
+            const isActive = block.is_active === false ? false : true;
             await client.query(
-                'INSERT INTO prompt_blocks (user_id, config_slot, name, role, content, position) VALUES ($1, $2, $3, $4, $5, $6)',
-                [req.user.id, slot, block.name, block.role, block.content, i]
+                'INSERT INTO prompt_blocks (user_id, config_slot, name, role, content, position, is_active) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+                [req.user.id, slot, block.name, block.role, block.content, i, isActive]
             );
         }
 
         await client.query('COMMIT');
         
-        // Send back the newly saved blocks, which will now have new IDs
-        const result = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
+        const result = await pool.query('SELECT id, name, role, content, position, is_active FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
         res.json({ blocks: result.rows });
 
     } catch (err) {
