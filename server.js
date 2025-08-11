@@ -6,6 +6,7 @@ const path = require('path');
 const fileUpload = require('express-fileupload');
 const pool = require('./config/db');
 const { startReactivationJob } = require('./services/keyService');
+const dotenv = require('dotenv');
 
 // Import Routes
 const authRoutes = require('./routes/auth');

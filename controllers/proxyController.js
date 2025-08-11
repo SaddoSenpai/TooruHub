@@ -2,7 +2,8 @@
 const crypto = require('crypto');
 const axios = require('axios');
 const keyService = require('../services/keyService');
-const promptService = require('../services/promptService');
+const promptService =require('../services/promptService');
+const { decrypt } = require('../services/cryptoService'); // <-- ADD THIS LINE
 
 exports.handleProxyRequest = async (req, res) => {
   const reqId = crypto.randomBytes(4).toString('hex');
@@ -10,6 +11,7 @@ exports.handleProxyRequest = async (req, res) => {
   let keyToUse = null;
 
   try {
+    // ... (code for getting provider is unchanged)
     const body = req.body || {};
     const model = (body.model || '').toString();
     console.log(`[${reqId}] User ${req.user.id} requesting model: ${model}`);
@@ -27,10 +29,16 @@ exports.handleProxyRequest = async (req, res) => {
       return res.status(400).json({ error: `No active API key available for provider '${provider}'. Please add one or reactivate a rate-limited key.`});
     }
     
-    const apiKey = keyToUse.api_key;
+    const apiKey = decrypt(keyToUse.api_key); // <-- DECRYPT THE KEY HERE
+    if (apiKey === 'DECRYPTION_FAILED') {
+        console.error(`[${reqId}] FATAL: Decryption failed for key ID ${keyToUse.id}. The ENCRYPTION_KEY on the server may have changed.`);
+        return res.status(500).json({ error: 'Internal Server Error: Could not process API key.' });
+    }
+
     console.log(`[${reqId}] Using key ID: ${keyToUse.id} for provider: ${provider}`);
 
     const mergedMessages = await promptService.buildFinalMessages(req.user.id, body);
+    // ... (rest of the controller logic is unchanged, it already uses the `apiKey` variable)
     console.log(`[${reqId}] FINAL MESSAGES TO BE SENT (${provider}):`, JSON.stringify(mergedMessages, null, 2));
     if (mergedMessages.length === 0) {
       return res.status(500).json({ error: 'Proxy error: Failed to construct a valid prompt.' });
@@ -38,6 +46,7 @@ exports.handleProxyRequest = async (req, res) => {
 
     // --- Gemini Provider Logic ---
     if (provider === 'gemini') {
+      // ... (Gemini logic is unchanged, it uses the decrypted `apiKey` variable)
       let systemInstructionText = '';
       const contents = [];
       mergedMessages.forEach(m => {
@@ -86,6 +95,7 @@ exports.handleProxyRequest = async (req, res) => {
 
     // --- OpenAI / OpenRouter Provider Logic ---
     if (provider === 'openrouter' || provider === 'openai') {
+      // ... (This logic is also unchanged, it uses the decrypted `apiKey` variable)
       const forwardBody = { ...body, messages: mergedMessages };
       const forwardUrl = provider === 'openrouter' ? 'https://openrouter.ai/api/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
       
@@ -103,6 +113,7 @@ exports.handleProxyRequest = async (req, res) => {
     return res.status(400).json({ error: `Unsupported provider '${provider}'.` });
 
   } catch (err) {
+    // ... (Error handling logic is unchanged)
     const errorData = err.response?.data;
     const errorStatus = err.response?.status;
     const errorText = JSON.stringify(errorData);
