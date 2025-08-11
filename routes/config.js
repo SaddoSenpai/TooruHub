@@ -16,13 +16,10 @@ router.put('/configs/active', requireAuth, configController.setActiveConfig);
 router.get('/configs/export', requireAuth, configController.exportConfig);
 router.post('/configs/import', requireAuth, configController.importConfig);
 
-// Block CRUD
+// --- REFACTORED BLOCK MANAGEMENT ---
+// Get all blocks for a slot
 router.get('/config', requireAuth, configController.getBlocks);
-router.post('/config', requireAuth, configController.addBlock);
-router.put('/config/:id', requireAuth, configController.updateBlock);
-router.delete('/config/:id', requireAuth, configController.deleteBlock);
-
-// Reordering
-router.post('/config/reorder', requireAuth, configController.reorderBlocks);
+// Atomically update all blocks for a slot
+router.put('/config/slot/:slot', requireAuth, configController.updateSlotConfiguration);
 
 module.exports = router;

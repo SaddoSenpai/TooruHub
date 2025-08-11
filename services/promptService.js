@@ -11,7 +11,8 @@ const DEFAULT_GEMINI_SAFETY_SETTINGS = [
 async function parseJanitorInput(incomingMessages) {
   let characterName = 'Character';
   let characterInfo = '';
-  let userPersona = '';
+  let userInfo = ''; // Renamed from userPersona
+  let scenarioInfo = ''; // Renamed from scenario
   let chatHistory = [];
   const fullContent = (incomingMessages || []).map(m => m.content || '').join('\n\n');
   
@@ -25,15 +26,21 @@ async function parseJanitorInput(incomingMessages) {
   const userRegex = /<UserPersona>([\s\S]*?)<\/UserPersona>/;
   const userMatch = fullContent.match(userRegex);
   if (userMatch) {
-    userPersona = userMatch[1].trim();
+    userInfo = userMatch[1].trim();
+  }
+
+  const scenarioRegex = /<scenario>([\s\S]*?)<\/scenario>/;
+  const scenarioMatch = fullContent.match(scenarioRegex);
+  if (scenarioMatch) {
+    scenarioInfo = scenarioMatch[1].trim();
   }
 
   chatHistory = (incomingMessages || []).filter(m => {
     const content = m.content || '';
-    return !content.includes("'s Persona>") && !content.includes("<UserPersona>");
+    return !content.includes("'s Persona>") && !content.includes("<UserPersona>") && !content.includes("<scenario>");
   });
 
-  return { characterName, characterInfo, userPersona, chatHistory };
+  return { characterName, characterInfo, userInfo, scenarioInfo, chatHistory };
 }
 
 async function buildFinalMessages(userId, incomingBody) {
@@ -52,30 +59,35 @@ async function buildFinalMessages(userId, incomingBody) {
     }
 
     const fullConfigContent = userBlocks.map(b => b.content || '').join('');
-    if (!fullConfigContent.includes('<<PARSED_CHARACTER_INFO>>') || !fullConfigContent.includes('<<PARSED_USER_PERSONA>>') || !fullConfigContent.includes('<<PARSED_CHAT_HISTORY>>')) {
-        throw new Error('Your active proxy configuration is invalid. It must contain all three placeholders. Please edit it in /config.');
+    if (!fullConfigContent.includes('<<CHARACTER_INFO>>') || !fullConfigContent.includes('<<SCENARIO_INFO>>') || !fullConfigContent.includes('<<USER_INFO>>') || !fullConfigContent.includes('<<CHAT_HISTORY>>')) {
+        throw new Error('Your active proxy configuration is invalid. It must contain all four placeholders. Please edit it in /config.');
     }
 
-    const { characterName, characterInfo, userPersona, chatHistory } = await parseJanitorInput(incomingBody.messages);
+    const { characterName, characterInfo, userInfo, scenarioInfo, chatHistory } = await parseJanitorInput(incomingBody.messages);
     const finalMessages = [];
 
     for (const block of userBlocks) {
         let currentContent = block.content || '';
-        if (currentContent.includes('<<PARSED_CHAT_HISTORY>>')) {
-            const parts = currentContent.split('<<PARSED_CHAT_HISTORY>>');
+        // Define a replacer function for clarity
+        const replacer = (text) => text
+            .replace(/{{char}}/g, characterName)
+            .replace(/<<CHARACTER_INFO>>/g, characterInfo)
+            .replace(/<<SCENARIO_INFO>>/g, scenarioInfo)
+            .replace(/<<USER_INFO>>/g, userInfo);
+
+        if (currentContent.includes('<<CHAT_HISTORY>>')) {
+            const parts = currentContent.split('<<CHAT_HISTORY>>');
             const beforeText = parts[0];
             const afterText = parts[1];
             if (beforeText.trim()) {
-                let processedBeforeText = beforeText.replace(/{{char}}/g, characterName).replace(/<<PARSED_CHARACTER_INFO>>/g, characterInfo).replace(/<<PARSED_USER_PERSONA>>/g, userPersona);
-                finalMessages.push({ role: block.role, content: processedBeforeText });
+                finalMessages.push({ role: block.role, content: replacer(beforeText) });
             }
             finalMessages.push(...chatHistory);
             if (afterText.trim()) {
-                let processedAfterText = afterText.replace(/{{char}}/g, characterName).replace(/<<PARSED_CHARACTER_INFO>>/g, characterInfo).replace(/<<PARSED_USER_PERSONA>>/g, userPersona);
-                finalMessages.push({ role: block.role, content: processedAfterText });
+                finalMessages.push({ role: block.role, content: replacer(afterText) });
             }
         } else {
-            currentContent = currentContent.replace(/{{char}}/g, characterName).replace(/<<PARSED_CHARACTER_INFO>>/g, characterInfo).replace(/<<PARSED_USER_PERSONA>>/g, userPersona);
+            currentContent = replacer(currentContent);
             if (currentContent.trim()) {
                 finalMessages.push({ role: block.role, content: currentContent });
             }

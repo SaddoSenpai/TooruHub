@@ -24,7 +24,7 @@
     .edit-form .form-row input, .edit-form .form-row select { flex: 1; padding: 0.5rem; }
     .edit-form textarea { width: 100%; min-height: 150px; font-family: monospace; padding: 0.5rem; box-sizing: border-box; }
     .edit-form-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
-    .edit-form-actions .cancel-btn { background-color: #6c757d; }
+    .edit-form-actions .cancel-btn { background-color: #6c757d; color: white; }
     .block-item .edit-form { display: none; }
     .block-item.is-editing .block-header { display: none; }
     .block-item.is-editing .edit-form { display: flex; }
@@ -32,6 +32,10 @@
     .import-input { position: absolute; left: 0; top: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
     .active-indicator { font-size: 0.8em; color: #28a745; font-weight: bold; margin-left: auto; }
     .validation-error { color: #dc3545; font-weight: bold; border: 1px solid; padding: 0.5rem; margin-bottom: 1rem; }
+    .save-config-btn { background-color: #28a745; color: white; }
+    .save-config-btn:hover { background-color: #218838; }
+    .discard-changes-btn { background-color: #6c757d; color: white; }
+    .discard-changes-btn:hover { background-color: #5a6268; }
   </style>
 </head>
 <body>
@@ -48,18 +52,22 @@
       <!-- Content for Tab 1 -->
       <div class="tab-content active" data-slot="1">
         <div class="config-actions">
+          <button class="save-config-btn" disabled>Save Configuration</button>
+          <button class="discard-changes-btn" disabled>Discard Changes</button>
           <button class="rename-btn">Rename</button>
           <button class="export-btn">Export</button>
           <button class="import-btn">Import <input type="file" class="import-input" accept=".json" /></button>
           <button class="set-active-btn">Set Active for Proxy</button>
           <span class="active-indicator" style="display:none;">★ Active for Proxy</span>
         </div>
-        <p>Arrange and edit your prompt blocks. Your config MUST contain these three placeholders: <code>&lt;&lt;PARSED_CHARACTER_INFO&gt;&gt;</code>, <code>&lt;&lt;PARSED_USER_PERSONA&gt;&gt;</code>, and <code>&lt;&lt;PARSED_CHAT_HISTORY&gt;&gt;</code>. Use <code>{{char}}</code> for the character's name.</p>
+        <p>Arrange and edit your prompt blocks. Your config MUST contain these four placeholders: <code>&lt;&lt;CHARACTER_INFO&gt;&gt;</code>, <code>&lt;&lt;SCENARIO_INFO&gt;&gt;</code>, <code>&lt;&lt;USER_INFO&gt;&gt;</code>, and <code>&lt;&lt;CHAT_HISTORY&gt;&gt;</code>. Use <code>{{char}}</code> for the character's name.</p>
         <div class="blocksList">Loading...</div>
       </div>
       <!-- Content for Tab 2 -->
       <div class="tab-content" data-slot="2">
         <div class="config-actions">
+          <button class="save-config-btn" disabled>Save Configuration</button>
+          <button class="discard-changes-btn" disabled>Discard Changes</button>
           <button class="rename-btn">Rename</button>
           <button class="export-btn">Export</button>
           <button class="import-btn">Import <input type="file" class="import-input" accept=".json" /></button>
@@ -72,6 +80,8 @@
       <!-- Content for Tab 3 -->
       <div class="tab-content" data-slot="3">
         <div class="config-actions">
+          <button class="save-config-btn" disabled>Save Configuration</button>
+          <button class="discard-changes-btn" disabled>Discard Changes</button>
           <button class="rename-btn">Rename</button>
           <button class="export-btn">Export</button>
           <button class="import-btn">Import <input type="file" class="import-input" accept=".json" /></button>
@@ -96,7 +106,7 @@
       </div>
       <textarea id="new_content" placeholder="Block content (string). Use {{char}} for the character's name."></textarea>
       <div class="edit-form-actions">
-        <button id="btnAddBlock">Add block</button>
+        <button id="btnAddBlock">Add block to draft</button>
       </div>
     </div>
 
@@ -114,8 +124,13 @@
     let activeTab = 1;
     let proxyActiveSlot = 1;
     let configNames = ['Config 1', 'Config 2', 'Config 3'];
-    let blocksBySlot = { 1: [], 2: [], 3: [] };
-    const REQUIRED_PLACEHOLDERS = ['<<PARSED_CHARACTER_INFO>>', '<<PARSED_USER_PERSONA>>', '<<PARSED_CHAT_HISTORY>>'];
+    
+    // --- REFACTORED STATE MANAGEMENT ---
+    // 'saved' holds the state from the server. 'draft' is what the user edits.
+    let savedBlocksBySlot = { 1: [], 2: [], 3: [] };
+    let draftBlocksBySlot = { 1: [], 2: [], 3: [] };
+
+    const REQUIRED_PLACEHOLDERS = ['<<CHARACTER_INFO>>', '<<SCENARIO_INFO>>', '<<USER_INFO>>', '<<CHAT_HISTORY>>'];
 
     async function api(path, opts = {}) {
       const headers = opts.headers || {};
@@ -145,22 +160,30 @@
         return missing;
     }
 
-    // FIX: Rewritten renderBlocks function
+    function checkForUnsavedChanges(slot) {
+        const hasChanges = JSON.stringify(savedBlocksBySlot[slot]) !== JSON.stringify(draftBlocksBySlot[slot]);
+        const tabContent = document.querySelector(`.tab-content[data-slot="${slot}"]`);
+        tabContent.querySelector('.save-config-btn').disabled = !hasChanges;
+        tabContent.querySelector('.discard-changes-btn').disabled = !hasChanges;
+    }
+
     function renderBlocks(slot) {
         const container = document.querySelector(`.tab-content[data-slot="${slot}"] .blocksList`);
-        const currentBlocks = blocksBySlot[slot] || [];
-        let html = ''; // Start with an empty string
+        const currentBlocks = draftBlocksBySlot[slot] || [];
+        let html = '';
 
         const missing = validateConfig(currentBlocks);
         if (missing.length > 0) {
-            html += `<div class="validation-error"><strong>Invalid Configuration!</strong> Missing required placeholder(s):<br><code>${missing.join(', ')}</code></div>`;
+            const escapedMissing = missing.map(p => p.replace(/</g, '&lt;').replace(/>/g, '&gt;')).join(', ');
+            html += `<div class="validation-error"><strong>Invalid Configuration!</strong> Missing required placeholder(s):<br><code>${escapedMissing}</code></div>`;
         }
 
         if (currentBlocks.length === 0) {
             html += '<i>No blocks for this config. Add one below or import a config.</i>';
         } else {
-            html += currentBlocks.map(b => `
-            <div class="block-item" id="block-${b.id}" data-id="${b.id}">
+            // Use a temporary client-side ID for new blocks that don't have a DB ID yet
+            html += currentBlocks.map((b, index) => `
+            <div class="block-item" data-index="${index}">
               <div class="block-header">
                 <div class="block-title"><strong>${b.name}</strong> <small>(${b.role})</small></div>
                 <div class="block-actions">
@@ -176,69 +199,53 @@
             </div>`).join('');
         }
 
-        // Set the innerHTML only ONCE to replace all previous content
         container.innerHTML = html;
         attachBlockEventListeners(slot);
+        checkForUnsavedChanges(slot);
     }
 
     function attachBlockEventListeners(slot) {
       document.querySelectorAll(`.tab-content[data-slot="${slot}"] .block-item`).forEach(blockEl => {
-        const blockId = blockEl.dataset.id;
-        const upBtn = blockEl.querySelector('.up-btn');
-        if (upBtn) upBtn.onclick = () => moveBlock(blockId, 'up');
-        const downBtn = blockEl.querySelector('.down-btn');
-        if (downBtn) downBtn.onclick = () => moveBlock(blockId, 'down');
-        const delBtn = blockEl.querySelector('.del-btn');
-        if (delBtn) delBtn.onclick = async () => {
-          const tempBlocks = blocksBySlot[slot].filter(b => b.id != blockId);
-          const missing = validateConfig(tempBlocks);
-          if (missing.length > 0) {
-              alert(`Cannot delete this block, as it would make the config invalid. Missing: ${missing.join(', ')}`);
-              return;
-          }
-          if (!confirm('Delete this block?')) return;
-          await api('/api/config/' + blockId, { method: 'DELETE' });
-          loadBlocks(slot);
+        const index = parseInt(blockEl.dataset.index, 10);
+        
+        blockEl.querySelector('.up-btn').onclick = () => {
+            if (index > 0) {
+                [draftBlocksBySlot[slot][index], draftBlocksBySlot[slot][index - 1]] = [draftBlocksBySlot[slot][index - 1], draftBlocksBySlot[slot][index]];
+                renderBlocks(slot);
+            }
         };
-        const editBtn = blockEl.querySelector('.edit-btn');
-        if (editBtn) editBtn.onclick = () => blockEl.classList.add('is-editing');
-        const cancelBtn = blockEl.querySelector('.cancel-btn');
-        if (cancelBtn) cancelBtn.onclick = () => blockEl.classList.remove('is-editing');
-        const saveBtn = blockEl.querySelector('.save-btn');
-        if (saveBtn) saveBtn.onclick = async () => {
+        blockEl.querySelector('.down-btn').onclick = () => {
+            if (index < draftBlocksBySlot[slot].length - 1) {
+                [draftBlocksBySlot[slot][index], draftBlocksBySlot[slot][index + 1]] = [draftBlocksBySlot[slot][index + 1], draftBlocksBySlot[slot][index]];
+                renderBlocks(slot);
+            }
+        };
+        blockEl.querySelector('.del-btn').onclick = () => {
+          if (!confirm('Delete this block from your draft?')) return;
+          draftBlocksBySlot[slot].splice(index, 1);
+          renderBlocks(slot);
+        };
+        blockEl.querySelector('.edit-btn').onclick = () => blockEl.classList.add('is-editing');
+        blockEl.querySelector('.cancel-btn').onclick = () => blockEl.classList.remove('is-editing');
+        
+        blockEl.querySelector('.save-btn').onclick = () => {
           const newName = blockEl.querySelector('.edit-name').value;
           const newRole = blockEl.querySelector('.edit-role').value;
           const newContent = blockEl.querySelector('.edit-content').value;
           
-          const tempBlocks = blocksBySlot[slot].map(b => b.id == blockId ? {...b, content: newContent} : b);
-          const missing = validateConfig(tempBlocks);
-          if (missing.length > 0) {
-              alert(`Cannot save this block, as it would make the config invalid. Missing: ${missing.join(', ')}`);
-              return;
-          }
-
-          await api('/api/config/' + blockId, { method: 'PUT', body: { name: newName, role: newRole, content: newContent } });
-          loadBlocks(slot);
+          draftBlocksBySlot[slot][index] = { ...draftBlocksBySlot[slot][index], name: newName, role: newRole, content: newContent };
+          blockEl.classList.remove('is-editing');
+          renderBlocks(slot);
         };
       });
     }
 
-    async function moveBlock(blockId, direction) {
-      const id = Number(blockId);
-      const order = blocksBySlot[activeTab].map(b => b.id);
-      const idx = order.indexOf(id);
-      if ((direction === 'up' && idx > 0) || (direction === 'down' && idx < order.length - 1)) {
-        const newIdx = direction === 'up' ? idx - 1 : idx + 1;
-        [order[idx], order[newIdx]] = [order[newIdx], order[idx]];
-        await api(`/api/config/reorder?slot=${activeTab}`, { method: 'POST', body: { order } });
-        loadBlocks(activeTab);
-      }
-    }
-
     async function loadBlocks(slot) {
       try {
-        const j = await api(`/api/config?slot=${slot}`);
-        blocksBySlot[slot] = j.blocks;
+        const { blocks } = await api(`/api/config?slot=${slot}`);
+        // Deep copy to avoid reference issues
+        savedBlocksBySlot[slot] = JSON.parse(JSON.stringify(blocks));
+        draftBlocksBySlot[slot] = JSON.parse(JSON.stringify(blocks));
         renderBlocks(slot);
       } catch (err) {
         console.error(err);
@@ -266,17 +273,46 @@
         activeTab = slot;
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.slot == slot));
         document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.dataset.slot == slot));
-        loadBlocks(slot);
+        if (!savedBlocksBySlot[slot].length && !draftBlocksBySlot[slot].length) {
+            loadBlocks(slot);
+        } else {
+            renderBlocks(slot);
+        }
     }
 
-    function attachTabEventListeners() {
+    function attachGlobalEventListeners() {
         document.querySelectorAll('.tab-btn').forEach(btn => {
             btn.onclick = () => switchTab(btn.dataset.slot);
         });
 
-        document.querySelectorAll('.rename-btn').forEach(btn => {
-            btn.onclick = async (ev) => {
-                const slot = ev.target.closest('.tab-content').dataset.slot;
+        document.querySelectorAll('.tab-content').forEach(tabContent => {
+            const slot = tabContent.dataset.slot;
+
+            tabContent.querySelector('.save-config-btn').onclick = async () => {
+                const missing = validateConfig(draftBlocksBySlot[slot]);
+                if (missing.length > 0) {
+                    alert(`Cannot save. Configuration is invalid.\nMissing: ${missing.join(', ')}`);
+                    return;
+                }
+                try {
+                    const { blocks } = await api(`/api/config/slot/${slot}`, { method: 'PUT', body: { blocks: draftBlocksBySlot[slot] } });
+                    savedBlocksBySlot[slot] = JSON.parse(JSON.stringify(blocks));
+                    draftBlocksBySlot[slot] = JSON.parse(JSON.stringify(blocks));
+                    renderBlocks(slot);
+                    alert('Configuration saved successfully!');
+                } catch (err) {
+                    alert('Failed to save configuration: ' + JSON.stringify(err));
+                }
+            };
+
+            tabContent.querySelector('.discard-changes-btn').onclick = () => {
+                if (!confirm('Are you sure you want to discard all unsaved changes?')) return;
+                draftBlocksBySlot[slot] = JSON.parse(JSON.stringify(savedBlocksBySlot[slot]));
+                renderBlocks(slot);
+            };
+            
+            // Other buttons (rename, export, etc.)
+            tabContent.querySelector('.rename-btn').onclick = async () => {
                 const currentName = configNames[slot - 1];
                 const newName = prompt(`Enter new name for "${currentName}":`, currentName);
                 if (newName && newName !== currentName) {
@@ -285,94 +321,81 @@
                     await loadConfigMeta();
                 }
             };
-        });
-
-        document.querySelectorAll('.set-active-btn').forEach(btn => {
-            btn.onclick = async (ev) => {
-                const slot = parseInt(ev.target.closest('.tab-content').dataset.slot, 10);
-                await api('/api/configs/active', { method: 'PUT', body: { slot } });
+            tabContent.querySelector('.set-active-btn').onclick = async () => {
+                await api('/api/configs/active', { method: 'PUT', body: { slot: parseInt(slot, 10) } });
                 await loadConfigMeta();
             };
-        });
-
-        document.querySelectorAll('.export-btn').forEach(btn => {
-            btn.onclick = async (ev) => {
-                const slot = ev.target.closest('.tab-content').dataset.slot;
-                try {
-                    const response = await api(`/api/configs/export?slot=${slot}`, { isExport: true });
-                    const blob = await response.blob();
-                    const header = response.headers.get('Content-Disposition');
-                    const filename = header ? header.split('filename=')[1].replace(/"/g, '') : `config_${slot}.json`;
-                    
-                    const url = window.URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.style.display = 'none';
-                    a.href = url;
-                    a.download = filename;
-                    document.body.appendChild(a);
-                    a.click();
-                    window.URL.revokeObjectURL(url);
-                    a.remove();
-                } catch (err) {
-                    alert('Export failed: ' + JSON.stringify(err));
-                }
+            tabContent.querySelector('.export-btn').onclick = async () => {
+                // Export the DRAFT state, not the saved state
+                const exportData = { configName: configNames[slot-1], blocks: draftBlocksBySlot[slot].map(b => ({ name: b.name, role: b.role, content: b.content })) };
+                const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.style.display = 'none';
+                a.href = url;
+                a.download = `${configNames[slot-1].replace(/ /g, '_')}.json`;
+                document.body.appendChild(a);
+                a.click();
+                window.URL.revokeObjectURL(url);
+                a.remove();
             };
-        });
-
-        document.querySelectorAll('.import-input').forEach(input => {
-            input.onchange = async (ev) => {
-                const slot = ev.target.closest('.tab-content').dataset.slot;
+            tabContent.querySelector('.import-input').onchange = async (ev) => {
                 const file = ev.target.files[0];
                 if (!file) return;
-
-                if (!confirm(`This will overwrite "${configNames[slot-1]}". Are you sure?`)) {
+                if (!confirm(`This will overwrite your current DRAFT for "${configNames[slot-1]}". Are you sure?`)) {
                     ev.target.value = '';
                     return;
                 }
-
-                const formData = new FormData();
-                formData.append('configFile', file);
-
                 try {
-                    const result = await api(`/api/configs/import?slot=${slot}`, { method: 'POST', body: formData, isFormData: true });
-                    alert(`Successfully imported "${result.newName}"!`);
-                    await loadConfigMeta();
-                    switchTab(slot);
+                    const text = await file.text();
+                    const importData = JSON.parse(text);
+                    if (!importData.configName || !Array.isArray(importData.blocks)) throw new Error('Invalid JSON format');
+                    
+                    const missing = validateConfig(importData.blocks);
+                    if (missing.length > 0) {
+                        if (!confirm(`Warning: The imported config is missing required placeholders: ${missing.join(', ')}.\n\nDo you want to import it anyway?`)) {
+                            ev.target.value = '';
+                            return;
+                        }
+                    }
+                    
+                    draftBlocksBySlot[slot] = importData.blocks;
+                    configNames[slot-1] = importData.configName;
+                    document.querySelector(`.tab-btn[data-slot="${slot}"]`).textContent = importData.configName;
+                    renderBlocks(slot);
                 } catch (err) {
-                    alert('Import failed: ' + (err.detail || JSON.stringify(err)));
+                    alert('Import failed: ' + err.message);
                 } finally {
                     ev.target.value = '';
                 }
             };
         });
+
+        $('btnAddBlock').onclick = () => {
+            const name = $('new_name').value;
+            const role = $('new_role').value;
+            const content = $('new_content').value;
+            if (!name) {
+              alert('Block name is required.');
+              return;
+            }
+            draftBlocksBySlot[activeTab].push({ name, role, content });
+            $('new_name').value = '';
+            $('new_content').value = '';
+            renderBlocks(activeTab);
+        };
     }
 
     window.onload = async () => {
       try {
         await loadConfigMeta();
-        attachTabEventListeners();
-        switchTab(1);
+        attachGlobalEventListeners();
+        switchTab(1); // This will trigger the initial load for the first tab
       } catch (err) {
         console.error("Failed to initialize config page:", err);
         const container = document.querySelector('.tab-content.active .blocksList');
         if(container) container.innerHTML = `<pre>Fatal Error: Could not load configuration metadata. Please check the console for details.\n\n${JSON.stringify(err, null, 2)}</pre>`;
       }
-
-      $('btnAddBlock').onclick = async () => {
-        const name = $('new_name').value;
-        const role = $('new_role').value;
-        const content = $('new_content').value;
-        if (!name) {
-          alert('Block name is required.');
-          return;
-        }
-        try {
-          await api(`/api/config?slot=${activeTab}`, { method: 'POST', body: { name, role, content } });
-          $('new_name').value = '';
-          $('new_content').value = '';
-          loadBlocks(activeTab);
-        } catch (err) { alert(JSON.stringify(err)); }
-      };
     };
   </script>
 </body>

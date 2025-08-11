@@ -1,6 +1,7 @@
 // controllers/configController.js
 const pool = require('../config/db');
 
+// ... (getConfigMeta, updateConfigMeta, getActiveConfig, setActiveConfig, exportConfig, importConfig are unchanged) ...
 exports.getConfigMeta = async (req, res) => {
     const result = await pool.query('SELECT config_name_1, config_name_2, config_name_3, active_config_slot FROM users WHERE id = $1', [req.user.id]);
     res.json(result.rows[0]);
@@ -52,8 +53,8 @@ exports.importConfig = async (req, res) => {
         if (!importData.configName || !Array.isArray(importData.blocks)) { throw new Error('Invalid JSON format'); }
         
         const fullImportedContent = importData.blocks.map(b => b.content || '').join('');
-        if (!fullImportedContent.includes('<<PARSED_CHARACTER_INFO>>') || !fullImportedContent.includes('<<PARSED_USER_PERSONA>>') || !fullImportedContent.includes('<<PARSED_CHAT_HISTORY>>')) {
-            throw new Error('Imported config is invalid. It must contain all three placeholders.');
+        if (!fullImportedContent.includes('<<CHARACTER_INFO>>') || !fullImportedContent.includes('<<SCENARIO_INFO>>') || !fullImportedContent.includes('<<USER_INFO>>') || !fullImportedContent.includes('<<CHAT_HISTORY>>')) {
+            throw new Error('Imported config is invalid. It must contain all four placeholders.');
         }
         
         await client.query('BEGIN');
@@ -74,6 +75,9 @@ exports.importConfig = async (req, res) => {
     }
 };
 
+
+// --- REFACTORED BLOCK MANAGEMENT ---
+
 exports.getBlocks = async (req, res) => {
   const slot = parseInt(req.query.slot, 10) || 1;
   if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
@@ -81,67 +85,41 @@ exports.getBlocks = async (req, res) => {
   res.json({ blocks: result.rows });
 };
 
-exports.addBlock = async (req, res) => {
-  const slot = parseInt(req.query.slot, 10) || 1;
-  if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
-  
-  const { name, role, content } = req.body || {};
-  if (!name || !role) return res.status(400).json({ error: 'name and role required' });
-  
-  const maxRow = await pool.query('SELECT MAX(position) as mx FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2', [req.user.id, slot]);
-  const nextPos = (maxRow.rows[0]?.mx ?? -1) + 1;
-  
-  await pool.query('INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)', [req.user.id, name, role, content || '', nextPos, slot]);
-  
-  const blocks = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
-  res.json({ blocks: blocks.rows });
-};
+exports.updateSlotConfiguration = async (req, res) => {
+    const slot = parseInt(req.params.slot, 10);
+    if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
 
-exports.updateBlock = async (req, res) => {
-  const id = req.params.id;
-  const { name, role, content } = req.body || {};
-  
-  const blockCheck = await pool.query('SELECT * FROM prompt_blocks WHERE id = $1 AND user_id = $2', [id, req.user.id]);
-  const row = blockCheck.rows[0];
-  if (!row) return res.status(404).json({ error: 'not found' });
-  
-  await pool.query('UPDATE prompt_blocks SET name = $1, role = $2, content = $3 WHERE id = $4', [name || row.name, role || row.role, content ?? row.content, id]);
-  
-  const blocks = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, row.config_slot]);
-  res.json({ blocks: blocks.rows });
-};
+    const { blocks } = req.body;
+    if (!Array.isArray(blocks)) return res.status(400).json({ error: 'blocks array is required' });
 
-exports.deleteBlock = async (req, res) => {
-  const id = req.params.id;
-  
-  const blockCheck = await pool.query('SELECT * FROM prompt_blocks WHERE id = $1 AND user_id = $2', [id, req.user.id]);
-  const row = blockCheck.rows[0];
-  if (!row) return res.status(404).json({ error: 'not found' });
-  
-  await pool.query('DELETE FROM prompt_blocks WHERE id = $1', [id]);
-  
-  // Re-order remaining blocks
-  const remaining = await pool.query('SELECT id FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, row.config_slot]);
-  for (let i = 0; i < remaining.rows.length; i++) {
-    await pool.query('UPDATE prompt_blocks SET position = $1 WHERE id = $2', [i, remaining.rows[i].id]);
-  }
-  
-  const blocks = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, row.config_slot]);
-  res.json({ blocks: blocks.rows });
-};
+    const client = await pool.connect();
+    try {
+        await client.query('BEGIN');
 
-exports.reorderBlocks = async (req, res) => {
-  const slot = parseInt(req.query.slot, 10) || 1;
-  if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
-  
-  const { order } = req.body || {};
-  if (!Array.isArray(order)) return res.status(400).json({ error: 'order array required' });
-  
-  for (let i = 0; i < order.length; i++) {
-    const id = order[i];
-    await pool.query('UPDATE prompt_blocks SET position = $1 WHERE id = $2 AND user_id = $3 AND config_slot = $4', [i, id, req.user.id, slot]);
-  }
-  
-  const blocks = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
-  res.json({ blocks: blocks.rows });
+        // First, delete all existing blocks for this user and slot
+        await client.query('DELETE FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2', [req.user.id, slot]);
+
+        // Then, insert the new set of blocks
+        for (let i = 0; i < blocks.length; i++) {
+            const block = blocks[i];
+            // The new blocks from the frontend won't have a real DB id, so we use their content
+            await client.query(
+                'INSERT INTO prompt_blocks (user_id, config_slot, name, role, content, position) VALUES ($1, $2, $3, $4, $5, $6)',
+                [req.user.id, slot, block.name, block.role, block.content, i]
+            );
+        }
+
+        await client.query('COMMIT');
+        
+        // Send back the newly saved blocks, which will now have new IDs
+        const result = await pool.query('SELECT id, name, role, content, position FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
+        res.json({ blocks: result.rows });
+
+    } catch (err) {
+        await client.query('ROLLBACK');
+        console.error("Config slot update error:", err);
+        res.status(500).json({ error: 'Failed to save configuration.', detail: err.message });
+    } finally {
+        client.release();
+    }
 };
