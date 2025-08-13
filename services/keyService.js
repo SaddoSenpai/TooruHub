@@ -1,12 +1,27 @@
 // services/keyService.js
 const pool = require('../config/db');
+const cache = require('./cacheService'); // <-- NEW
 
 // In-Memory state for round-robin key rotation
 const keyRotationState = {};
 
 async function getRotatingKey(userId, provider) {
-    const res = await pool.query('SELECT * FROM api_keys WHERE user_id = $1 AND provider = $2 AND is_active = TRUE ORDER BY id', [userId, provider]);
-    const activeKeys = res.rows;
+    // --- NEW: Caching Logic ---
+    const cacheKey = `keys:${userId}:${provider}`;
+    let activeKeys = cache.get(cacheKey);
+
+    if (activeKeys) {
+        console.log(`[Cache] HIT for ${cacheKey}`);
+    } else {
+        console.log(`[Cache] MISS for ${cacheKey}`);
+        const res = await pool.query('SELECT * FROM api_keys WHERE user_id = $1 AND provider = $2 AND is_active = TRUE ORDER BY id', [userId, provider]);
+        activeKeys = res.rows;
+        if (activeKeys.length > 0) {
+            cache.set(cacheKey, activeKeys);
+        }
+    }
+    // --- End Caching Logic ---
+
     if (activeKeys.length === 0) return null;
 
     if (!keyRotationState[userId]) keyRotationState[userId] = {};
@@ -15,7 +30,6 @@ async function getRotatingKey(userId, provider) {
     const currentIndex = keyRotationState[userId][provider];
     const selectedKey = activeKeys[currentIndex];
     
-    // Move to the next key for the next request
     keyRotationState[userId][provider] = (currentIndex + 1) % activeKeys.length;
     
     return selectedKey;
@@ -24,6 +38,8 @@ async function getRotatingKey(userId, provider) {
 async function deactivateKey(keyId, reason) {
     console.log(`Deactivating key ${keyId} due to: ${reason}`);
     await pool.query('UPDATE api_keys SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = $1 WHERE id = $2', [reason, keyId]);
+    // Note: We don't need to invalidate cache here, as the auto-expiry will handle it.
+    // For immediate effect, you would need to find the user/provider and invalidate.
 }
 
 async function reactivateKeys() {
@@ -43,7 +59,7 @@ async function reactivateKeys() {
         const keysToReactivate = [];
         for (const key of rows) {
             if (key.deactivation_reason && key.deactivation_reason.startsWith('[Manual]')) {
-                continue; // Skip manually deactivated keys
+                continue;
             }
 
             const deactivatedDateUTC = new Date(key.deactivated_at).toISOString().split('T')[0];
@@ -51,7 +67,7 @@ async function reactivateKeys() {
 
             if (key.provider === 'gemini' && nowPST > deactivatedDatePST) {
                 keysToReactivate.push(key.id);
-            } else if (key.provider === 'openrouter' && nowUTC > deactivatedDateUTC) {
+            } else if ((key.provider === 'openrouter' || key.provider === 'llm7') && nowUTC > deactivatedDateUTC) {
                 keysToReactivate.push(key.id);
             }
         }
@@ -62,6 +78,10 @@ async function reactivateKeys() {
                 'UPDATE api_keys SET is_active = TRUE, deactivated_at = NULL, deactivation_reason = NULL WHERE id = ANY($1::int[])',
                 [keysToReactivate]
             );
+            // Invalidate all key caches since we don't know which user was affected.
+            // A more advanced implementation would fetch user_id for each key.
+            cache.flushAll();
+            console.log('[Cache] FLUSHED all caches due to key reactivation.');
         } else {
             console.log('-> Checked inactive keys, but none were eligible for automatic reactivation.');
         }
@@ -73,7 +93,7 @@ async function reactivateKeys() {
 function startReactivationJob() {
     console.log('Performing initial key reactivation check on startup...');
     reactivateKeys();
-    setInterval(reactivateKeys, 60 * 60 * 1000); // Run every hour
+    setInterval(reactivateKeys, 60 * 60 * 1000);
 }
 
 module.exports = {

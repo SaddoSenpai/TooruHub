@@ -1,9 +1,24 @@
 // middleware/auth.js
 const pool = require('../config/db');
+const cache = require('../services/cacheService'); // <-- NEW
 
 async function findUserByToken(token) {
+  const cacheKey = `user:${token}`;
+  const cachedUser = cache.get(cacheKey);
+
+  if (cachedUser) {
+    console.log(`[Cache] HIT for ${cacheKey}`);
+    return cachedUser;
+  }
+
+  console.log(`[Cache] MISS for ${cacheKey}`);
   const res = await pool.query('SELECT * FROM users WHERE proxy_token = $1', [token]);
-  return res.rows[0];
+  const user = res.rows[0];
+
+  if (user) {
+    cache.set(cacheKey, user); // Store the user object in cache
+  }
+  return user;
 }
 
 function requireAuth(req, res, next) {
@@ -26,4 +41,4 @@ function requireAuth(req, res, next) {
   });
 }
 
-module.exports = { requireAuth };
+module.exports = { requireAuth, findUserByToken }; // <-- MODIFIED: Export findUserByToken for use elsewhere

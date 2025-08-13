@@ -1,6 +1,7 @@
 // public/app.js
 const $ = id => document.getElementById(id);
 let proxyToken = localStorage.getItem('proxy_token') || null;
+let statsInterval = null;
 
 async function api(path, opts = {}) {
   const headers = opts.headers || {};
@@ -12,24 +13,53 @@ async function api(path, opts = {}) {
   return data;
 }
 
+async function updateStats() {
+    try {
+        const stats = await api('/api/stats');
+        $('statsCpu').textContent = stats.cpu;
+        $('statsRam').textContent = stats.ram.used;
+        $('statsRpm').textContent = stats.rpm;
+    } catch (err) {
+        console.error("Failed to fetch stats:", err);
+        if (statsInterval) clearInterval(statsInterval);
+    }
+}
+
 function showDashboard() {
   $('auth').style.display = 'none';
   $('dashboard').style.display = 'block';
   $('proxyToken').textContent = proxyToken;
-  $('exampleCurl').textContent = `curl "http://localhost:3000/v1/chat/completions" \\
+  $('exampleCurl').textContent = `# To use a provider-specific endpoint (recommended for llm7.io):
+curl "http://localhost:3000/llm7/v1/chat/completions" \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer ${proxyToken}" \\
+  -d '{ "model":"open-mistral-7b", "messages":[{"role":"user","content":"Explain to me how AI works"}] }'
+
+# To use the generic endpoint (auto-detects provider from model name):
+curl "http://localhost:3000/v1/chat/completions" \\
   -H "Content-Type: application/json" \\
   -H "Authorization: Bearer ${proxyToken}" \\
   -d '{ "model":"gemini-pro", "messages":[{"role":"user","content":"Explain to me how AI works"}] }'`;
   loadKeys();
+
+  if (statsInterval) clearInterval(statsInterval);
+  updateStats();
+  statsInterval = setInterval(updateStats, 3000);
 }
 
 async function loadKeys() {
   try {
+    const providerDisplayNames = {
+        gemini: 'gemini',
+        openrouter: 'openrouter',
+        openai: 'openai',
+        llm7: 'llm7.io'
+    };
     const data = await api('/keys');
     const list = data.keys.map(k => `
       <div class="key-item ${!k.is_active ? 'deactivated' : ''}">
         <div class="key-info">
-          <strong>${k.provider}</strong> (${k.name || '-'})
+          <strong>${providerDisplayNames[k.provider] || k.provider}</strong> (${k.name || '-'})
           <div class="muted">Added: ${new Date(k.created_at).toLocaleString()}</div>
           ${!k.is_active ? '<span> ⚠️ Rate-Limited / Inactive</span>' : ''}
         </div>
@@ -137,7 +167,7 @@ window.onload = () => {
       proxyToken = j.proxy_token;
       localStorage.setItem('proxy_token', proxyToken);
       $('proxyToken').textContent = proxyToken;
-      loadKeys();
+      showDashboard();
     } catch (err) { alert(JSON.stringify(err)); }
   };
 
@@ -158,6 +188,7 @@ window.onload = () => {
   };
 
   $('btnLogout').onclick = () => {
+    if (statsInterval) clearInterval(statsInterval);
     proxyToken = null;
     localStorage.removeItem('proxy_token');
     location.reload();

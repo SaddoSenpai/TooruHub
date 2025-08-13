@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Prompt Structure — Config</title>
+  <title>Prompt Structure — TooruHub</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="/style.css" />
   <style>
@@ -13,35 +13,12 @@
     .tab-content { display: none; }
     .tab-content.active { display: block; }
     .config-actions { margin-bottom: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-    .block-item, .add-block-form { background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
-    
-    /* --- FIX: New Layout Styles --- */
-    .block-top-row {
-        display: flex;
-        align-items: center;
-        gap: 1rem;
-    }
-    .block-title {
-        flex: 1; /* Allow title to take up available space */
-        min-width: 0; /* Prevents flexbox from crushing the title on small screens */
-        word-break: normal; /* Fixes the vertical text issue */
-        font-size: 1.1em;
-    }
-    .block-actions {
-        display: flex;
-        gap: 0.5rem;
-        align-items: center;
-    }
-    .block-actions .reorder-btns {
-        display: flex;
-        flex-direction: column;
-        gap: 4px;
-    }
-    .block-actions .reorder-btns button {
-        line-height: 1;
-        padding: 2px 6px;
-    }
-
+    .block-item, .add-block-form { background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; transition: opacity 0.2s ease-in-out; }
+    .block-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
+    .block-title { flex: 1; font-size: 1.1em; }
+    .block-actions { display: flex; gap: 0.5rem; align-items: center; }
+    .block-actions .reorder-btns { display: flex; flex-direction: column; gap: 4px; margin-right: 0.5rem; }
+    .block-actions .reorder-btns button { line-height: 1; padding: 2px 6px; }
     .edit-form { display: flex; flex-direction: column; gap: 0.75rem; }
     .edit-form .form-row { display: flex; gap: 0.5rem; }
     .edit-form .form-row input, .edit-form .form-row select { flex: 1; padding: 0.5rem; }
@@ -49,8 +26,7 @@
     .edit-form-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
     .edit-form-actions .cancel-btn { background-color: #6c757d; color: white; }
     .block-item .edit-form { display: none; }
-    .block-item.is-editing .block-top-row,
-    .block-item.is-editing .block-actions { display: none; }
+    .block-item.is-editing .block-header { display: none; }
     .block-item.is-editing .edit-form { display: flex; }
     .import-btn { position: relative; }
     .import-input { position: absolute; left: 0; top: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
@@ -60,20 +36,15 @@
     .save-config-btn:hover { background-color: #218838; }
     .discard-changes-btn { background-color: #6c757d; color: white; }
     .discard-changes-btn:hover { background-color: #5a6268; }
-
-    /* Toggle Switch CSS */
-    .toggle-switch { position: relative; display: inline-block; width: 50px; height: 28px; }
-    .toggle-switch input { opacity: 0; width: 0; height: 0; }
-    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; border-radius: 28px; }
-    .slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 4px; background-color: white; transition: .4s; border-radius: 50%; }
-    input:checked + .slider { background-color: #28a745; }
-    input:checked + .slider:before { transform: translateX(22px); }
-    .block-item.is-deactivated { opacity: 0.6; background-color: #f0f0f0; }
+    
+    .block-item.is-disabled { opacity: 0.5; }
+    .block-item.is-disabled .block-title { text-decoration: line-through; }
+    .enable-toggle { margin-right: 1rem; transform: scale(1.2); cursor: pointer; }
   </style>
 </head>
 <body>
   <main class="container">
-    <h1>Prompt Structure — Config</h1>
+    <h1>Prompt Structure — TooruHub</h1>
     
     <div class="config-tabs" id="configTabs">
       <button class="tab-btn active" data-slot="1">Config 1</button>
@@ -82,7 +53,6 @@
     </div>
 
     <div id="tabContents">
-      <!-- Content for Tab 1 -->
       <div class="tab-content active" data-slot="1">
         <div class="config-actions">
           <button class="save-config-btn" disabled>Save Configuration</button>
@@ -90,13 +60,12 @@
           <button class="rename-btn">Rename</button>
           <button class="export-btn">Export</button>
           <button class="import-btn">Import <input type="file" class="import-input" accept=".json" /></button>
-          <button class="set-active-btn">Set Active for Proxy</button>
-          <span class="active-indicator" style="display:none;">★ Active for Proxy</span>
+          <button class="set-active-btn">Set Active for TooruHub</button>
+          <span class="active-indicator" style="display:none;">★ Active for TooruHub</span>
         </div>
-        <p>Arrange and edit your prompt blocks. Your config MUST contain these four placeholders: <code>&lt;&lt;CHARACTER_INFO&gt;&gt;</code>, <code>&lt;&lt;SCENARIO_INFO&gt;&gt;</code>, <code>&lt;&lt;USER_INFO&gt;&gt;</code>, and <code>&lt;&lt;CHAT_HISTORY&gt;&gt;</code>. Use <code>{{char}}</code> for the character's name.</p>
+        <p>Arrange and edit your prompt blocks. Your config MUST contain these four placeholders in its ENABLED blocks: <code>&lt;&lt;CHARACTER_INFO&gt;&gt;</code>, <code>&lt;&lt;SCENARIO_INFO&gt;&gt;</code>, <code>&lt;&lt;USER_INFO&gt;&gt;</code>, and <code>&lt;&lt;CHAT_HISTORY&gt;&gt;</code>. Use <code>{{char}}</code> for the character's name.</p>
         <div class="blocksList">Loading...</div>
       </div>
-      <!-- Content for Tab 2 -->
       <div class="tab-content" data-slot="2">
         <div class="config-actions">
           <button class="save-config-btn" disabled>Save Configuration</button>
@@ -104,13 +73,12 @@
           <button class="rename-btn">Rename</button>
           <button class="export-btn">Export</button>
           <button class="import-btn">Import <input type="file" class="import-input" accept=".json" /></button>
-          <button class="set-active-btn">Set Active for Proxy</button>
-          <span class="active-indicator" style="display:none;">★ Active for Proxy</span>
+          <button class="set-active-btn">Set Active for TooruHub</button>
+          <span class="active-indicator" style="display:none;">★ Active for TooruHub</span>
         </div>
         <p>Arrange and edit your prompt blocks...</p>
         <div class="blocksList">Loading...</div>
       </div>
-      <!-- Content for Tab 3 -->
       <div class="tab-content" data-slot="3">
         <div class="config-actions">
           <button class="save-config-btn" disabled>Save Configuration</button>
@@ -118,8 +86,8 @@
           <button class="rename-btn">Rename</button>
           <button class="export-btn">Export</button>
           <button class="import-btn">Import <input type="file" class="import-input" accept=".json" /></button>
-          <button class="set-active-btn">Set Active for Proxy</button>
-          <span class="active-indicator" style="display:none;">★ Active for Proxy</span>
+          <button class="set-active-btn">Set Active for TooruHub</button>
+          <span class="active-indicator" style="display:none;">★ Active for TooruHub</span>
         </div>
         <p>Arrange and edit your prompt blocks...</p>
         <div class="blocksList">Loading...</div>
@@ -186,7 +154,8 @@
     }
 
     function validateConfig(blocks) {
-        const fullContent = blocks.map(b => b.content || '').join('');
+        const enabledBlocks = blocks.filter(b => b.is_enabled);
+        const fullContent = enabledBlocks.map(b => b.content || '').join('');
         const missing = REQUIRED_PLACEHOLDERS.filter(p => !fullContent.includes(p));
         return missing;
     }
@@ -206,41 +175,28 @@
         const missing = validateConfig(currentBlocks);
         if (missing.length > 0) {
             const escapedMissing = missing.map(p => p.replace(/</g, '&lt;').replace(/>/g, '&gt;')).join(', ');
-            html += `<div class="validation-error"><strong>Invalid Configuration!</strong> Your full set of blocks (including deactivated ones) is missing required placeholder(s):<br><code>${escapedMissing}</code></div>`;
+            html += `<div class="validation-error"><strong>Invalid Configuration!</strong> Missing required placeholder(s) in ENABLED blocks:<br><code>${escapedMissing}</code></div>`;
         }
 
         if (currentBlocks.length === 0) {
             html += '<i>No blocks for this config. Add one below or import a config.</i>';
         } else {
-            html += currentBlocks.map((b, index) => {
-                const isActive = b.is_active !== false;
-                const isDeactivatedClass = !isActive ? 'is-deactivated' : '';
-                return `
-                <div class="block-item ${isDeactivatedClass}" data-index="${index}">
-                  <div class="block-top-row">
-                    <label class="toggle-switch">
-                      <input type="checkbox" class="activate-toggle" ${isActive ? 'checked' : ''}>
-                      <span class="slider"></span>
-                    </label>
-                    <div class="block-title"><strong>${b.name}</strong> <small>(${b.role})</small></div>
-                  </div>
-
-                  <div class="block-actions">
-                    <div class="reorder-btns">
-                      <button class="up-btn">↑</button>
-                      <button class="down-btn">↓</button>
-                    </div>
-                    <button class="edit-btn">Edit</button>
-                    <button class="del-btn">Delete</button>
-                  </div>
-
-                  <div class="edit-form">
-                    <div class="form-row"><input class="edit-name" value="${b.name}"/><select class="edit-role"><option value="system" ${b.role === 'system' ? 'selected' : ''}>system</option><option value="user" ${b.role === 'user' ? 'selected' : ''}>user</option><option value="assistant" ${b.role === 'assistant' ? 'selected' : ''}>assistant</option></select></div>
-                    <textarea class="edit-content" placeholder="Block content">${b.content || ''}</textarea>
-                    <div class="edit-form-actions"><button class="cancel-btn">Cancel</button><button class="save-btn">Save</button></div>
-                  </div>
-                </div>`
-            }).join('');
+            html += currentBlocks.map((b, index) => `
+            <div class="block-item ${!b.is_enabled ? 'is-disabled' : ''}" data-index="${index}">
+              <div class="block-header">
+                <input type="checkbox" class="enable-toggle" title="Enable/Disable Block" ${b.is_enabled ? 'checked' : ''}>
+                <div class="block-title"><strong>${b.name}</strong> <small>(${b.role})</small></div>
+                <div class="block-actions">
+                  <div class="reorder-btns"><button class="up-btn">↑</button><button class="down-btn">↓</button></div>
+                  <button class="edit-btn">Edit</button><button class="del-btn">Delete</button>
+                </div>
+              </div>
+              <div class="edit-form">
+                <div class="form-row"><input class="edit-name" value="${b.name}"/><select class="edit-role"><option value="system" ${b.role === 'system' ? 'selected' : ''}>system</option><option value="user" ${b.role === 'user' ? 'selected' : ''}>user</option><option value="assistant" ${b.role === 'assistant' ? 'selected' : ''}>assistant</option></select></div>
+                <textarea class="edit-content" placeholder="Block content">${b.content || ''}</textarea>
+                <div class="edit-form-actions"><button class="cancel-btn">Cancel</button><button class="save-btn">Save</button></div>
+              </div>
+            </div>`).join('');
         }
 
         container.innerHTML = html;
@@ -252,12 +208,11 @@
       document.querySelectorAll(`.tab-content[data-slot="${slot}"] .block-item`).forEach(blockEl => {
         const index = parseInt(blockEl.dataset.index, 10);
         
-        blockEl.querySelector('.activate-toggle').onchange = (e) => {
-            const isChecked = e.target.checked;
-            draftBlocksBySlot[slot][index].is_active = isChecked;
-            blockEl.classList.toggle('is-deactivated', !isChecked);
-            checkForUnsavedChanges(slot);
+        blockEl.querySelector('.enable-toggle').onclick = (ev) => {
+            draftBlocksBySlot[slot][index].is_enabled = ev.target.checked;
+            renderBlocks(slot);
         };
+
         blockEl.querySelector('.up-btn').onclick = () => {
             if (index > 0) {
                 [draftBlocksBySlot[slot][index], draftBlocksBySlot[slot][index - 1]] = [draftBlocksBySlot[slot][index - 1], draftBlocksBySlot[slot][index]];
@@ -282,7 +237,6 @@
           const newName = blockEl.querySelector('.edit-name').value;
           const newRole = blockEl.querySelector('.edit-role').value;
           const newContent = blockEl.querySelector('.edit-content').value;
-          
           draftBlocksBySlot[slot][index] = { ...draftBlocksBySlot[slot][index], name: newName, role: newRole, content: newContent };
           blockEl.classList.remove('is-editing');
           renderBlocks(slot);
@@ -322,7 +276,10 @@
         activeTab = slot;
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.slot == slot));
         document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.dataset.slot == slot));
-        if (!savedBlocksBySlot[slot].length && !draftBlocksBySlot[slot].length) {
+        
+        // --- THIS IS THE CORRECTED LOGIC ---
+        // Only fetch from the server if we have no data at all for this slot (neither saved nor draft).
+        if (savedBlocksBySlot[slot].length === 0 && draftBlocksBySlot[slot].length === 0) {
             loadBlocks(slot);
         } else {
             renderBlocks(slot);
@@ -340,7 +297,7 @@
             tabContent.querySelector('.save-config-btn').onclick = async () => {
                 const missing = validateConfig(draftBlocksBySlot[slot]);
                 if (missing.length > 0) {
-                    alert(`Cannot save. Your full set of blocks is missing required placeholders:\n${missing.join(', ')}`);
+                    alert(`Cannot save. Configuration is invalid.\nMissing from enabled blocks: ${missing.join(', ')}`);
                     return;
                 }
                 try {
@@ -374,7 +331,7 @@
                 await loadConfigMeta();
             };
             tabContent.querySelector('.export-btn').onclick = async () => {
-                const exportData = { configName: configNames[slot-1], blocks: draftBlocksBySlot[slot].map(b => ({ name: b.name, role: b.role, content: b.content, is_active: b.is_active })) };
+                const exportData = { configName: configNames[slot-1], blocks: draftBlocksBySlot[slot].map(b => ({ name: b.name, role: b.role, content: b.content, is_enabled: b.is_enabled })) };
                 const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
                 const url = window.URL.createObjectURL(blob);
                 const a = document.createElement('a');
@@ -398,15 +355,20 @@
                     const importData = JSON.parse(text);
                     if (!importData.configName || !Array.isArray(importData.blocks)) throw new Error('Invalid JSON format');
                     
-                    const missing = validateConfig(importData.blocks);
+                    const blocksToImport = importData.blocks.map(b => ({
+                        ...b,
+                        is_enabled: b.is_enabled !== false
+                    }));
+
+                    const missing = validateConfig(blocksToImport);
                     if (missing.length > 0) {
-                        if (!confirm(`Warning: The imported config is missing required placeholders: ${missing.join(', ')}.\n\nDo you want to import it anyway?`)) {
+                        if (!confirm(`Warning: The imported config is missing required placeholders in its enabled blocks: ${missing.join(', ')}.\n\nDo you want to import it anyway?`)) {
                             ev.target.value = '';
                             return;
                         }
                     }
                     
-                    draftBlocksBySlot[slot] = importData.blocks;
+                    draftBlocksBySlot[slot] = blocksToImport;
                     configNames[slot-1] = importData.configName;
                     document.querySelector(`.tab-btn[data-slot="${slot}"]`).textContent = importData.configName;
                     renderBlocks(slot);
@@ -426,7 +388,7 @@
               alert('Block name is required.');
               return;
             }
-            draftBlocksBySlot[activeTab].push({ name, role, content, is_active: true });
+            draftBlocksBySlot[activeTab].push({ name, role, content, is_enabled: true });
             $('new_name').value = '';
             $('new_content').value = '';
             renderBlocks(activeTab);

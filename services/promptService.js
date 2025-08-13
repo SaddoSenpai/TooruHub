@@ -1,7 +1,7 @@
 // services/promptService.js
 const pool = require('../config/db');
+const cache = require('./cacheService');
 
-// ... (DEFAULT_GEMINI_SAFETY_SETTINGS and parseJanitorInput are unchanged) ...
 const DEFAULT_GEMINI_SAFETY_SETTINGS = [
   { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
   { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
@@ -44,7 +44,6 @@ async function parseJanitorInput(incomingMessages) {
   return { characterName, characterInfo, userInfo, scenarioInfo, chatHistory };
 }
 
-
 async function buildFinalMessages(userId, incomingBody) {
     const activeSlotResult = await pool.query('SELECT active_config_slot FROM users WHERE id = $1', [userId]);
     const activeSlot = activeSlotResult.rows[0]?.active_config_slot || 1;
@@ -53,27 +52,33 @@ async function buildFinalMessages(userId, incomingBody) {
         return incomingBody.messages || [];
     }
 
-    const result = await pool.query('SELECT * FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [userId, activeSlot]);
-    
-    // --- NEW: Filter for active blocks only ---
-    const allUserBlocks = result.rows;
-    const activeUserBlocks = allUserBlocks.filter(b => b.is_active);
+    const cacheKey = `blocks:enabled:${userId}:${activeSlot}`;
+    let userBlocks = cache.get(cacheKey);
 
-    if (!activeUserBlocks || activeUserBlocks.length === 0) {
+    if (userBlocks) {
+        console.log(`[Cache] HIT for ${cacheKey}`);
+    } else {
+        console.log(`[Cache] MISS for ${cacheKey}`);
+        const result = await pool.query('SELECT * FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 AND is_enabled = TRUE ORDER BY position', [userId, activeSlot]);
+        userBlocks = result.rows;
+        if (userBlocks.length > 0) {
+            cache.set(cacheKey, userBlocks);
+        }
+    }
+
+    if (!userBlocks || userBlocks.length === 0) {
         return incomingBody.messages || [];
     }
 
-    // --- VALIDATION: Check against ALL blocks to ensure placeholders aren't permanently deactivated ---
-    const fullConfigContent = allUserBlocks.map(b => b.content || '').join('');
+    const fullConfigContent = userBlocks.map(b => b.content || '').join('');
     if (!fullConfigContent.includes('<<CHARACTER_INFO>>') || !fullConfigContent.includes('<<SCENARIO_INFO>>') || !fullConfigContent.includes('<<USER_INFO>>') || !fullConfigContent.includes('<<CHAT_HISTORY>>')) {
-        throw new Error('Your active proxy configuration is invalid. It must contain all four placeholders. Please edit it in /config.');
+        throw new Error('Your active proxy configuration is invalid. It must contain all four placeholders in its ENABLED blocks. Please edit it in /config.');
     }
 
     const { characterName, characterInfo, userInfo, scenarioInfo, chatHistory } = await parseJanitorInput(incomingBody.messages);
     const finalMessages = [];
 
-    // --- Use the filtered activeUserBlocks to build the prompt ---
-    for (const block of activeUserBlocks) {
+    for (const block of userBlocks) {
         let currentContent = block.content || '';
         const replacer = (text) => text
             .replace(/{{char}}/g, characterName)

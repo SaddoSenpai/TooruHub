@@ -2,15 +2,19 @@
 const bcrypt = require('bcrypt');
 const pool = require('../config/db');
 const { genToken } = require('../utils/helpers');
+const cache = require('../services/cacheService'); // <-- NEW
 
 const SALT_ROUNDS = 10;
 
+// findUserByUsername is only used for signup/login, which are infrequent.
+// No need to cache this one.
 async function findUserByUsername(username) {
   const res = await pool.query('SELECT * FROM users WHERE username = $1', [username]);
   return res.rows[0];
 }
 
 exports.signup = async (req, res) => {
+  // ... (this function is unchanged)
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'username & password required' });
   
@@ -23,7 +27,6 @@ exports.signup = async (req, res) => {
     const result = await pool.query('INSERT INTO users (username, password_hash, proxy_token) VALUES ($1, $2, $3) RETURNING id', [username, hash, token]);
     const userId = result.rows[0].id;
 
-    // Create default prompt blocks for all 3 slots with the new placeholder names
     for (let slot = 1; slot <= 3; slot++) {
         await Promise.all([
             pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'Character Info Block', 'user', '<<CHARACTER_INFO>>', 0, slot]),
@@ -39,8 +42,8 @@ exports.signup = async (req, res) => {
   }
 };
 
-// ... (login and regenerateToken functions are unchanged) ...
 exports.login = async (req, res) => {
+  // ... (this function is unchanged)
   const { username, password } = req.body || {};
   if (!username || !password) return res.status(400).json({ error: 'username & password required' });
 
@@ -59,7 +62,14 @@ exports.login = async (req, res) => {
 };
 
 exports.regenerateToken = async (req, res) => {
+  const oldToken = req.user.proxy_token; // Get the token before we change it
   const newToken = genToken();
   await pool.query('UPDATE users SET proxy_token = $1 WHERE id = $2', [newToken, req.user.id]);
+  
+  // --- NEW: Invalidate the old token's cache ---
+  const cacheKey = `user:${oldToken}`;
+  cache.del(cacheKey);
+  console.log(`[Cache] DELETED ${cacheKey} due to token regeneration.`);
+
   res.json({ proxy_token: newToken });
 };

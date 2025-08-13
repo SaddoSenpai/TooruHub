@@ -3,21 +3,23 @@ const crypto = require('crypto');
 const axios = require('axios');
 const keyService = require('../services/keyService');
 const promptService =require('../services/promptService');
-const { decrypt } = require('../services/cryptoService'); // <-- ADD THIS LINE
+const { decrypt } = require('../services/cryptoService');
+const statsService = require('../services/statsService');
 
 exports.handleProxyRequest = async (req, res) => {
+  statsService.incrementRequestCount();
   const reqId = crypto.randomBytes(4).toString('hex');
   console.log(`\n[${new Date().toISOString()}] --- NEW REQUEST ${reqId} ---`);
   let keyToUse = null;
+  let provider;
 
   try {
-    // ... (code for getting provider is unchanged)
     const body = req.body || {};
     const model = (body.model || '').toString();
     console.log(`[${reqId}] User ${req.user.id} requesting model: ${model}`);
     console.log(`[${reqId}] RAW INCOMING MESSAGES:`, JSON.stringify(body.messages, null, 2));
 
-    let provider = body.provider || req.headers['x-provider'];
+    provider = req.provider_from_route || body.provider || req.headers['x-provider'];
     if (!provider) {
       if (model.toLowerCase().startsWith('gemini')) provider = 'gemini';
       else if (model.toLowerCase().startsWith('gpt')) provider = 'openai';
@@ -29,7 +31,7 @@ exports.handleProxyRequest = async (req, res) => {
       return res.status(400).json({ error: `No active API key available for provider '${provider}'. Please add one or reactivate a rate-limited key.`});
     }
     
-    const apiKey = decrypt(keyToUse.api_key); // <-- DECRYPT THE KEY HERE
+    const apiKey = decrypt(keyToUse.api_key);
     if (apiKey === 'DECRYPTION_FAILED') {
         console.error(`[${reqId}] FATAL: Decryption failed for key ID ${keyToUse.id}. The ENCRYPTION_KEY on the server may have changed.`);
         return res.status(500).json({ error: 'Internal Server Error: Could not process API key.' });
@@ -38,15 +40,12 @@ exports.handleProxyRequest = async (req, res) => {
     console.log(`[${reqId}] Using key ID: ${keyToUse.id} for provider: ${provider}`);
 
     const mergedMessages = await promptService.buildFinalMessages(req.user.id, body);
-    // ... (rest of the controller logic is unchanged, it already uses the `apiKey` variable)
     console.log(`[${reqId}] FINAL MESSAGES TO BE SENT (${provider}):`, JSON.stringify(mergedMessages, null, 2));
     if (mergedMessages.length === 0) {
-      return res.status(500).json({ error: 'Proxy error: Failed to construct a valid prompt.' });
+      return res.status(500).json({ error: 'TooruHub error: Failed to construct a valid prompt.' });
     }
 
-    // --- Gemini Provider Logic ---
     if (provider === 'gemini') {
-      // ... (Gemini logic is unchanged, it uses the decrypted `apiKey` variable)
       let systemInstructionText = '';
       const contents = [];
       mergedMessages.forEach(m => {
@@ -93,11 +92,17 @@ exports.handleProxyRequest = async (req, res) => {
       return res.json(responsePayload);
     }
 
-    // --- OpenAI / OpenRouter Provider Logic ---
-    if (provider === 'openrouter' || provider === 'openai') {
-      // ... (This logic is also unchanged, it uses the decrypted `apiKey` variable)
+    if (provider === 'openrouter' || provider === 'openai' || provider === 'llm7') {
       const forwardBody = { ...body, messages: mergedMessages };
-      const forwardUrl = provider === 'openrouter' ? 'https://openrouter.ai/api/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions';
+      
+      let forwardUrl;
+      if (provider === 'openrouter') {
+        forwardUrl = 'https://openrouter.ai/api/v1/chat/completions';
+      } else if (provider === 'openai') {
+        forwardUrl = 'https://api.openai.com/v1/chat/completions';
+      } else if (provider === 'llm7') {
+        forwardUrl = 'https://api.llm7.io/v1/chat/completions';
+      }
       
       if (forwardBody.stream) {
         const resp = await axios.post(forwardUrl, forwardBody, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, responseType: 'stream', timeout: 120000 });
@@ -113,18 +118,17 @@ exports.handleProxyRequest = async (req, res) => {
     return res.status(400).json({ error: `Unsupported provider '${provider}'.` });
 
   } catch (err) {
-    // ... (Error handling logic is unchanged)
     const errorData = err.response?.data;
     const errorStatus = err.response?.status;
     const errorText = JSON.stringify(errorData);
 
-    if (keyToUse && (errorStatus === 429 || (errorText && errorText.toLowerCase().includes('rate limit exceeded')))) {
+    if (keyToUse && provider !== 'llm7' && (errorStatus === 429 || (errorText && errorText.toLowerCase().includes('rate limit exceeded')))) {
         const reason = `[${errorStatus}] ${errorText}`;
         await keyService.deactivateKey(keyToUse.id, reason);
     }
 
     console.error(`[${reqId}] --- PROXY ERROR ---`, err.response?.data ?? err.message);
     const msg = err.response?.data ?? { message: err.message };
-    res.status(500).json({ error: 'Proxy failed', detail: msg });
+    res.status(500).json({ error: 'TooruHub request failed', detail: msg });
   }
 };

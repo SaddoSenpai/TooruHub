@@ -2,13 +2,38 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>AI Key Proxy</title>
+  <title>TooruHub</title>
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="/style.css" />
+  <style>
+    /* Add some basic styling for the new stats panel */
+    .stats-panel {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: var(--spacing-md);
+      background-color: #f9f9f9;
+      border: 1px solid var(--border-color);
+      border-radius: var(--border-radius);
+      padding: var(--spacing-md);
+      margin-bottom: var(--spacing-lg);
+    }
+    .stat-item {
+      text-align: center;
+    }
+    .stat-item .value {
+      font-size: 1.8em;
+      font-weight: 600;
+      color: #007bff;
+    }
+    .stat-item .label {
+      font-size: 0.9em;
+      color: #666;
+    }
+  </style>
 </head>
 <body>
   <main class="container">
-    <h1>AI Key Proxy</h1>
+    <h1>TooruHub</h1>
 
     <section id="auth">
       <div id="signupBox">
@@ -28,7 +53,25 @@
 
     <section id="dashboard" style="display:none;">
       <h2>Dashboard</h2>
-      <p>Your proxy token (keep private):</p>
+
+      <!-- ADD THIS NEW STATS PANEL -->
+      <div class="stats-panel">
+        <div class="stat-item">
+          <div class="value"><span id="statsCpu">--</span>%</div>
+          <div class="label">CPU Utilization</div>
+        </div>
+        <div class="stat-item">
+          <div class="value"><span id="statsRam">--</span> MB</div>
+          <div class="label">RAM Used</div>
+        </div>
+        <div class="stat-item">
+          <div class="value"><span id="statsRpm">--</span></div>
+          <div class="label">Requests / Min</div>
+        </div>
+      </div>
+      <!-- END OF NEW STATS PANEL -->
+
+      <p>Your TooruHub Token (keep private):</p>
       <pre id="proxyToken"></pre>
       <button id="btnRegenerate">Regenerate token</button>
 
@@ -39,6 +82,7 @@
           <option value="gemini">gemini</option>
           <option value="openrouter">openrouter</option>
           <option value="openai">openai</option>
+          <option value="llm7">llm7.io</option>
         </select>
         <input id="keyName" placeholder="name (optional)" />
         <input id="apiKey" placeholder="API key" />
@@ -50,13 +94,13 @@
 
       <hr />
       <h3>Prompt Structure</h3>
-      <p>Manage your prompt configurations. The active config will be used for all proxy requests.</p>
+      <p>Manage your prompt configurations. The active config will be used for all TooruHub requests.</p>
       <button id="btnManagePrompts">Manage Prompt Structure (/config)</button>
 
       <hr />
-      <h3>Example proxy curl</h3>
+      <h3>Example TooruHub Curl</h3>
       <pre id="exampleCurl"></pre>
-      <p class="muted">Use your proxy token in Authorization header: <code>Authorization: Bearer &lt;proxy_token&gt;</code></p>
+      <p class="muted">Use your TooruHub Token in Authorization header: <code>Authorization: Bearer &lt;tooruhub_token&gt;</code></p>
       <button id="btnLogout">Logout</button>
     </section>
   </main>
