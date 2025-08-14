@@ -63,55 +63,128 @@ exports.handleProxyRequest = async (req, res) => {
       if (systemInstructionText) geminiRequestBody.system_instruction = { parts: [{ text: systemInstructionText }] };
 
       if (body.stream) {
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?key=${encodeURIComponent(apiKey)}`;
+        console.log(`[${reqId}] Initializing Gemini stream...`);
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?key=${encodeURIComponent(apiKey)}&alt=sse`;
         const providerResp = await axios.post(url, geminiRequestBody, { headers: { 'Content-Type': 'application/json' }, responseType: 'stream', timeout: 120000 });
-        res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('Connection', 'keep-alive'); res.flushHeaders && res.flushHeaders();
+        
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders && res.flushHeaders();
+
+        let buffer = '';
         providerResp.data.on('data', (chunk) => {
-          const str = chunk.toString();
-          const lines = str.split('\n').map(l => l.trim()).filter(Boolean);
-          for (const line of lines) {
-            try {
-              const parsed = JSON.parse(line);
-              const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
-              if (text) {
-                const formatted = { id: `chatcmpl-${reqId}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model, choices: [{ delta: { content: text }, index: 0, finish_reason: null }] };
-                res.write(`data: ${JSON.stringify(formatted)}\n\n`);
+          buffer += chunk.toString();
+          let newlineIndex;
+          while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.substring(0, newlineIndex).trim();
+            buffer = buffer.substring(newlineIndex + 1);
+
+            if (line.startsWith('data: ')) {
+              const jsonStr = line.substring(6).trim();
+              if (jsonStr) {
+                try {
+                  const parsed = JSON.parse(jsonStr);
+                  const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+                  if (text) {
+                    const formatted = { id: `chatcmpl-${reqId}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model, choices: [{ delta: { content: text }, index: 0, finish_reason: null }] };
+                    res.write(`data: ${JSON.stringify(formatted)}\n\n`);
+                  }
+                } catch (e) {
+                  console.error(`[${reqId}] Error parsing Gemini stream JSON:`, jsonStr, e);
+                }
               }
-            } catch (e) {}
+            }
           }
         });
-        providerResp.data.on('end', () => { res.write('data: [DONE]\n\n'); res.end(); });
-        providerResp.data.on('error', (err) => { console.error(`[${reqId}] Gemini stream error`, err); try { res.end(); } catch (e) {} });
-        return;
-      }
 
-      const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
-      const providerResp = await axios.post(url, geminiRequestBody, { headers: { 'Content-Type': 'application/json' }, timeout: 120000 });
-      const candidate = providerResp.data?.candidates?.[0];
-      const responsePayload = { id: `chatcmpl-${reqId}`, object: 'chat.completion', created: Math.floor(Date.now() / 1000), model, choices: [{ index: 0, message: { role: 'assistant', content: candidate?.content?.parts?.[0]?.text ?? '' }, finish_reason: candidate?.finishReason || 'stop' }], usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } };
-      return res.json(responsePayload);
+        providerResp.data.on('end', () => {
+          console.log(`[${reqId}] Gemini stream ended.`);
+          res.write('data: [DONE]\n\n');
+          res.end();
+        });
+
+        providerResp.data.on('error', (err) => {
+          console.error(`[${reqId}] Gemini stream connection error:`, err);
+          try { res.end(); } catch (e) {}
+        });
+        
+        return;
+      } else {
+        console.log(`[${reqId}] Initializing Gemini non-streaming request...`);
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+        const providerResp = await axios.post(url, geminiRequestBody, { headers: { 'Content-Type': 'application/json' }, timeout: 120000 });
+        
+        console.log(`[${reqId}] Gemini Non-Streaming RAW RESPONSE:`, JSON.stringify(providerResp.data, null, 2));
+
+        const candidate = providerResp.data?.candidates?.[0];
+        
+        // --- THIS IS THE CRITICAL FIX ---
+        // Check if the response was blocked by safety filters.
+        if (candidate && !candidate.content) {
+            const safetyInfo = {
+                finishReason: candidate.finishReason,
+                safetyRatings: candidate.safetyRatings,
+                promptFeedback: providerResp.data.promptFeedback
+            };
+            const errorMessage = `Gemini response was blocked due to safety settings. Reason: ${safetyInfo.finishReason}.`;
+            console.error(`[${reqId}] Gemini Safety Block:`, JSON.stringify(safetyInfo, null, 2));
+            
+            const finalErrorPayload = { error: { message: errorMessage, type: 'gemini_safety_block', ...safetyInfo } };
+            console.log(`[${reqId}] TooruHub Final Error Response (Gemini Safety):`, JSON.stringify(finalErrorPayload, null, 2));
+            return res.status(400).json(finalErrorPayload);
+        }
+        // --- END OF FIX ---
+
+        const responsePayload = { 
+            id: `chatcmpl-${reqId}`, 
+            object: 'chat.completion', 
+            created: Math.floor(Date.now() / 1000), 
+            model, 
+            choices: [{ 
+                index: 0, 
+                message: { 
+                    role: 'assistant', 
+                    content: candidate?.content?.parts?.[0]?.text ?? '' 
+                }, 
+                finish_reason: candidate?.finishReason || 'stop' 
+            }], 
+            usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } 
+        };
+        
+        console.log(`[${reqId}] TooruHub Final Response (Gemini Non-Stream):`, JSON.stringify(responsePayload, null, 2));
+        return res.json(responsePayload);
+      }
     }
 
     if (provider === 'openrouter' || provider === 'openai' || provider === 'llm7') {
       const forwardBody = { ...body, messages: mergedMessages };
       
       let forwardUrl;
-      if (provider === 'openrouter') {
-        forwardUrl = 'https://openrouter.ai/api/v1/chat/completions';
-      } else if (provider === 'openai') {
-        forwardUrl = 'https://api.openai.com/v1/chat/completions';
-      } else if (provider === 'llm7') {
-        forwardUrl = 'https://api.llm7.io/v1/chat/completions';
-      }
+      if (provider === 'openrouter') forwardUrl = 'https://openrouter.ai/api/v1/chat/completions';
+      else if (provider === 'openai') forwardUrl = 'https://api.openai.com/v1/chat/completions';
+      else if (provider === 'llm7') forwardUrl = 'https://api.llm7.io/v1/chat/completions';
       
       if (forwardBody.stream) {
+        console.log(`[${reqId}] Initializing ${provider} stream...`);
         const resp = await axios.post(forwardUrl, forwardBody, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, responseType: 'stream', timeout: 120000 });
         res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('Connection', 'keep-alive');
+        
+        resp.data.on('error', (pipeErr) => {
+            console.error(`[${reqId}] Error during ${provider} stream pipe:`, pipeErr);
+            res.end();
+        });
+        
         resp.data.pipe(res);
         return;
       }
 
+      console.log(`[${reqId}] Initializing ${provider} non-streaming request...`);
       const providerResp = await axios.post(forwardUrl, forwardBody, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, timeout: 120000 });
+      
+      console.log(`[${reqId}] ${provider} Non-Streaming RAW RESPONSE (Status: ${providerResp.status}):`, JSON.stringify(providerResp.data, null, 2));
+      console.log(`[${reqId}] TooruHub Final Response (Forwarded from ${provider}):`, JSON.stringify(providerResp.data, null, 2));
+      
       return res.status(providerResp.status).json(providerResp.data);
     }
 
@@ -127,8 +200,25 @@ exports.handleProxyRequest = async (req, res) => {
         await keyService.deactivateKey(keyToUse.id, reason);
     }
 
-    console.error(`[${reqId}] --- PROXY ERROR ---`, err.response?.data ?? err.message);
-    const msg = err.response?.data ?? { message: err.message };
-    res.status(500).json({ error: 'TooruHub request failed', detail: msg });
+    const logError = {
+        message: err.message,
+        isAxiosError: err.isAxiosError,
+        request: err.config ? {
+            method: err.config.method,
+            url: err.config.url,
+            headers: err.config.headers,
+        } : undefined,
+        response: err.response ? {
+            status: err.response.status,
+            headers: err.response.headers,
+            data: err.response.data
+        } : undefined
+    };
+    console.error(`[${reqId}] --- PROXY ERROR ---`, JSON.stringify(logError, null, 2));
+    
+    const finalErrorPayload = { error: 'TooruHub request failed', detail: err.response?.data ?? { message: err.message } };
+    console.log(`[${reqId}] TooruHub Final Error Response:`, JSON.stringify(finalErrorPayload, null, 2));
+    
+    res.status(errorStatus || 500).json(finalErrorPayload);
   }
 };
