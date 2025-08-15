@@ -159,11 +159,12 @@ pre {
   gap: 1rem;
 }
 
-/* --- Block Header Layout & Icon Button Styling --- */
+/* --- Block Header Layout --- */
 .block-header {
   display: flex;
+  flex-wrap: wrap; /* Allow wrapping on small screens */
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: var(--spacing-md);
 }
 
 .switch-toggle {
@@ -172,7 +173,7 @@ pre {
 
 .block-title {
   flex-grow: 1;
-  min-width: 0;
+  min-width: 150px; /* Give the title a minimum width before wrapping */
   font-size: 1.1em;
   overflow-wrap: break-word;
 }
@@ -182,31 +183,8 @@ pre {
   display: flex;
   gap: var(--spacing-sm);
   align-items: center;
+  width: 100%; /* Make it take full width when it wraps */
 }
-
-.block-actions .edit-btn,
-.block-actions .del-btn {
-    font-size: 1.2em;
-    padding: 4px 8px;
-    line-height: 1;
-    background-color: transparent;
-    border: 1px solid transparent;
-}
-
-.block-actions .edit-btn:hover {
-    background-color: #e0e0e0;
-}
-
-.block-actions .del-btn {
-    color: #dc3545;
-}
-
-.block-actions .del-btn:hover {
-    background-color: #dc3545;
-    color: white;
-}
-/* --- End of Block Header Section --- */
-
 
 .block-actions .reorder-btns {
   display: flex;
@@ -233,5 +211,15 @@ pre {
 @media (max-width: 600px) {
   .edit-form .form-row {
     grid-template-columns: 1fr; /* Stack name/role inputs on mobile */
+  }
+
+  /* On mobile, force the actions to be on their own line */
+  .block-header {
+    /* The flex-wrap: wrap property will handle this automatically */
+  }
+
+  .block-actions {
+    justify-content: flex-start; /* Align buttons to the left on mobile */
+    padding-left: 0; /* Align with the title */
   }
 }
