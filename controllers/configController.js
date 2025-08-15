@@ -3,7 +3,7 @@ const pool = require('../config/db');
 const cache = require('../services/cacheService');
 
 exports.getConfigMeta = async (req, res) => {
-    const result = await pool.query('SELECT config_name_1, config_name_2, config_name_3, active_config_slot FROM users WHERE id = $1', [req.user.id]);
+    const result = await pool.query('SELECT config_name_1, config_name_2, config_name_3, active_config_slot, show_think_tags FROM users WHERE id = $1', [req.user.id]);
     res.json(result.rows[0]);
 };
 
@@ -12,6 +12,29 @@ exports.updateConfigMeta = async (req, res) => {
     if (!Array.isArray(names) || names.length !== 3) { return res.status(400).json({ error: 'Invalid names array' }); }
     await pool.query('UPDATE users SET config_name_1 = $1, config_name_2 = $2, config_name_3 = $3 WHERE id = $4', [names[0], names[1], names[2], req.user.id]);
     res.json({ ok: true });
+};
+
+// --- NEW ENDPOINT ---
+exports.updateUserSettings = async (req, res) => {
+    const { show_think_tags } = req.body;
+
+    if (typeof show_think_tags !== 'boolean') {
+        return res.status(400).json({ error: 'Invalid value for show_think_tags' });
+    }
+
+    try {
+        await pool.query('UPDATE users SET show_think_tags = $1 WHERE id = $2', [show_think_tags, req.user.id]);
+        
+        // Invalidate user cache to reflect the change immediately
+        const userCacheKey = `user:${req.user.proxy_token}`;
+        cache.del(userCacheKey);
+        console.log(`[Cache] DELETED ${userCacheKey} due to user settings change.`);
+
+        res.json({ ok: true });
+    } catch (err) {
+        console.error("Failed to update user settings:", err);
+        res.status(500).json({ error: 'Failed to update settings.' });
+    }
 };
 
 exports.getActiveConfig = async (req, res) => {
@@ -57,8 +80,8 @@ exports.importConfig = async (req, res) => {
         
         const enabledBlocks = importData.blocks.filter(b => b.is_enabled !== false);
         const fullImportedContent = enabledBlocks.map(b => b.content || '').join('');
-        if (!fullImportedContent.includes('<<CHARACTER_INFO>>') || !fullImportedContent.includes('<<SCENARIO_INFO>>') || !fullImportedContent.includes('<<USER_INFO>>') || !fullImportedContent.includes('<<CHAT_HISTORY>>')) {
-            throw new Error('Imported config is invalid. It must contain all four placeholders in its enabled blocks.');
+        if (!fullImportedContent.includes('<<CHARACTER_INFO>>') || !fullImportedContent.includes('<<SCENARIO_INFO>>') || !fullImportedContent.includes('<<USER_INFO>>') || !fullImportedContent.includes('<<CHAT_HISTORY>>') || !fullImportedContent.includes('<<SUMMARY>>')) {
+            throw new Error('Imported config is invalid. It must contain all five placeholders in its enabled blocks.');
         }
         
         await client.query('BEGIN');

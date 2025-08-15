@@ -53,7 +53,8 @@ async function loadKeys() {
         gemini: 'gemini',
         openrouter: 'openrouter',
         openai: 'openai',
-        llm7: 'llm7.io'
+        llm7: 'llm7.io',
+        deepseek: 'deepseek'
     };
     const data = await api('/keys');
     const list = data.keys.map(k => `

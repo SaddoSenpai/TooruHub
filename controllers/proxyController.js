@@ -1,6 +1,7 @@
 // controllers/proxyController.js
 const crypto = require('crypto');
 const axios = require('axios');
+const { Transform } = require('stream'); // For filtering deepseek stream
 const keyService = require('../services/keyService');
 const promptService =require('../services/promptService');
 const { decrypt } = require('../services/cryptoService');
@@ -16,13 +17,15 @@ exports.handleProxyRequest = async (req, res) => {
   try {
     const body = req.body || {};
     const model = (body.model || '').toString();
+    const modelLower = model.toLowerCase();
     console.log(`[${reqId}] User ${req.user.id} requesting model: ${model}`);
     console.log(`[${reqId}] RAW INCOMING MESSAGES:`, JSON.stringify(body.messages, null, 2));
 
     provider = req.provider_from_route || body.provider || req.headers['x-provider'];
     if (!provider) {
-      if (model.toLowerCase().startsWith('gemini')) provider = 'gemini';
-      else if (model.toLowerCase().startsWith('gpt')) provider = 'openai';
+      if (modelLower.startsWith('gemini')) provider = 'gemini';
+      else if (modelLower.startsWith('gpt')) provider = 'openai';
+      else if (modelLower === 'deepseek-chat' || modelLower === 'deepseek-reasoner') provider = 'deepseek';
       else provider = 'openrouter';
     }
 
@@ -57,7 +60,11 @@ exports.handleProxyRequest = async (req, res) => {
 
       const geminiRequestBody = {
         contents,
-        generation_config: { temperature: body.temperature ?? 0.2, top_k: body.top_k ?? undefined, top_p: body.top_p ?? 0.95 },
+        generation_config: { 
+            temperature: body.temperature, 
+            top_k: body.top_k ?? 5, 
+            top_p: body.top_p ?? 1 
+        },
         safety_settings: body.safety_settings || promptService.DEFAULT_GEMINI_SAFETY_SETTINGS
       };
       if (systemInstructionText) geminiRequestBody.system_instruction = { parts: [{ text: systemInstructionText }] };
@@ -119,8 +126,6 @@ exports.handleProxyRequest = async (req, res) => {
 
         const candidate = providerResp.data?.candidates?.[0];
         
-        // --- THIS IS THE CRITICAL FIX ---
-        // Check if the response was blocked by safety filters.
         if (candidate && !candidate.content) {
             const safetyInfo = {
                 finishReason: candidate.finishReason,
@@ -134,7 +139,6 @@ exports.handleProxyRequest = async (req, res) => {
             console.log(`[${reqId}] TooruHub Final Error Response (Gemini Safety):`, JSON.stringify(finalErrorPayload, null, 2));
             return res.status(400).json(finalErrorPayload);
         }
-        // --- END OF FIX ---
 
         const responsePayload = { 
             id: `chatcmpl-${reqId}`, 
@@ -157,13 +161,19 @@ exports.handleProxyRequest = async (req, res) => {
       }
     }
 
-    if (provider === 'openrouter' || provider === 'openai' || provider === 'llm7') {
-      const forwardBody = { ...body, messages: mergedMessages };
+    if (provider === 'openrouter' || provider === 'openai' || provider === 'llm7' || provider === 'deepseek') {
+      const forwardBody = { 
+        ...body, 
+        messages: mergedMessages,
+        top_p: body.top_p ?? 1,
+        top_k: body.top_k ?? 5
+      };
       
       let forwardUrl;
       if (provider === 'openrouter') forwardUrl = 'https://openrouter.ai/api/v1/chat/completions';
       else if (provider === 'openai') forwardUrl = 'https://api.openai.com/v1/chat/completions';
       else if (provider === 'llm7') forwardUrl = 'https://api.llm7.io/v1/chat/completions';
+      else if (provider === 'deepseek') forwardUrl = 'https://api.deepseek.com/chat/completions';
       
       if (forwardBody.stream) {
         console.log(`[${reqId}] Initializing ${provider} stream...`);
@@ -175,7 +185,48 @@ exports.handleProxyRequest = async (req, res) => {
             res.end();
         });
         
-        resp.data.pipe(res);
+        // Conditionally filter deepseek-reasoner stream based on user setting
+        if (provider === 'deepseek' && modelLower === 'deepseek-reasoner' && !req.user.show_think_tags) {
+            console.log(`[${reqId}] Applying <think> tag filter for deepseek-reasoner stream as per user setting.`);
+            let buffer = '';
+            let isInsideThinkTag = false;
+
+            const thinkFilter = new Transform({
+                transform(chunk, encoding, callback) {
+                    buffer += chunk.toString();
+                    let output = '';
+
+                    while (true) {
+                        if (isInsideThinkTag) {
+                            const endTagIndex = buffer.indexOf('</think>');
+                            if (endTagIndex !== -1) {
+                                buffer = buffer.substring(endTagIndex + 8); // length of '</think>'
+                                isInsideThinkTag = false;
+                            } else {
+                                break; // Wait for more data
+                            }
+                        } else {
+                            const startTagIndex = buffer.indexOf('<think>');
+                            if (startTagIndex !== -1) {
+                                output += buffer.substring(0, startTagIndex);
+                                buffer = buffer.substring(startTagIndex);
+                                isInsideThinkTag = true;
+                            } else {
+                                output += buffer;
+                                buffer = '';
+                                break;
+                            }
+                        }
+                    }
+                    this.push(output);
+                    callback();
+                }
+            });
+            resp.data.pipe(thinkFilter).pipe(res);
+        } else {
+            // For all other providers, or if user wants to see think tags, pipe directly
+            resp.data.pipe(res);
+        }
         return;
       }
 
@@ -183,9 +234,20 @@ exports.handleProxyRequest = async (req, res) => {
       const providerResp = await axios.post(forwardUrl, forwardBody, { headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` }, timeout: 120000 });
       
       console.log(`[${reqId}] ${provider} Non-Streaming RAW RESPONSE (Status: ${providerResp.status}):`, JSON.stringify(providerResp.data, null, 2));
-      console.log(`[${reqId}] TooruHub Final Response (Forwarded from ${provider}):`, JSON.stringify(providerResp.data, null, 2));
       
-      return res.status(providerResp.status).json(providerResp.data);
+      let responseData = providerResp.data;
+      // ALWAYS filter deepseek-reasoner for the final non-streaming response
+      if (provider === 'deepseek' && modelLower === 'deepseek-reasoner') {
+          const content = responseData.choices?.[0]?.message?.content;
+          if (content) {
+              console.log(`[${reqId}] Applying <think> tag filter for deepseek-reasoner non-stream response.`);
+              responseData.choices[0].message.content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+          }
+      }
+
+      console.log(`[${reqId}] TooruHub Final Response (Forwarded from ${provider}):`, JSON.stringify(responseData, null, 2));
+      
+      return res.status(providerResp.status).json(responseData);
     }
 
     return res.status(400).json({ error: `Unsupported provider '${provider}'.` });

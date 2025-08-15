@@ -14,6 +14,7 @@ async function parseJanitorInput(incomingMessages) {
   let characterInfo = '';
   let userInfo = '';
   let scenarioInfo = '';
+  let summaryInfo = '';
   let chatHistory = [];
   const fullContent = (incomingMessages || []).map(m => m.content || '').join('\n\n');
   
@@ -36,12 +37,18 @@ async function parseJanitorInput(incomingMessages) {
     scenarioInfo = scenarioMatch[1].trim();
   }
 
+  const summaryRegex = /<summary>([\s\S]*?)<\/summary>/;
+  const summaryMatch = fullContent.match(summaryRegex);
+  if (summaryMatch) {
+    summaryInfo = summaryMatch[1].trim();
+  }
+
   chatHistory = (incomingMessages || []).filter(m => {
     const content = m.content || '';
-    return !content.includes("'s Persona>") && !content.includes("<UserPersona>") && !content.includes("<scenario>");
+    return !content.includes("'s Persona>") && !content.includes("<UserPersona>") && !content.includes("<scenario>") && !content.includes("<summary>");
   });
 
-  return { characterName, characterInfo, userInfo, scenarioInfo, chatHistory };
+  return { characterName, characterInfo, userInfo, scenarioInfo, summaryInfo, chatHistory };
 }
 
 async function buildFinalMessages(userId, incomingBody) {
@@ -71,11 +78,11 @@ async function buildFinalMessages(userId, incomingBody) {
     }
 
     const fullConfigContent = userBlocks.map(b => b.content || '').join('');
-    if (!fullConfigContent.includes('<<CHARACTER_INFO>>') || !fullConfigContent.includes('<<SCENARIO_INFO>>') || !fullConfigContent.includes('<<USER_INFO>>') || !fullConfigContent.includes('<<CHAT_HISTORY>>')) {
-        throw new Error('Your active proxy configuration is invalid. It must contain all four placeholders in its ENABLED blocks. Please edit it in /config.');
+    if (!fullConfigContent.includes('<<CHARACTER_INFO>>') || !fullConfigContent.includes('<<SCENARIO_INFO>>') || !fullConfigContent.includes('<<USER_INFO>>') || !fullConfigContent.includes('<<CHAT_HISTORY>>') || !fullConfigContent.includes('<<SUMMARY>>')) {
+        throw new Error('Your active proxy configuration is invalid. It must contain all five placeholders in its ENABLED blocks: <<CHARACTER_INFO>>, <<SCENARIO_INFO>>, <<USER_INFO>>, <<CHAT_HISTORY>>, and <<SUMMARY>>. Please edit it in /config.');
     }
 
-    const { characterName, characterInfo, userInfo, scenarioInfo, chatHistory } = await parseJanitorInput(incomingBody.messages);
+    const { characterName, characterInfo, userInfo, scenarioInfo, summaryInfo, chatHistory } = await parseJanitorInput(incomingBody.messages);
     const finalMessages = [];
 
     for (const block of userBlocks) {
@@ -84,7 +91,8 @@ async function buildFinalMessages(userId, incomingBody) {
             .replace(/{{char}}/g, characterName)
             .replace(/<<CHARACTER_INFO>>/g, characterInfo)
             .replace(/<<SCENARIO_INFO>>/g, scenarioInfo)
-            .replace(/<<USER_INFO>>/g, userInfo);
+            .replace(/<<USER_INFO>>/g, userInfo)
+            .replace(/<<SUMMARY>>/g, summaryInfo);
 
         if (currentContent.includes('<<CHAT_HISTORY>>')) {
             const parts = currentContent.split('<<CHAT_HISTORY>>');

@@ -12,6 +12,9 @@ router.put('/configs/meta', requireAuth, configController.updateConfigMeta);
 router.get('/configs/active', requireAuth, configController.getActiveConfig);
 router.put('/configs/active', requireAuth, configController.setActiveConfig);
 
+// --- NEW --- User-level settings
+router.put('/configs/settings', requireAuth, configController.updateUserSettings);
+
 // Import / Export
 router.get('/configs/export', requireAuth, configController.exportConfig);
 router.post('/configs/import', requireAuth, configController.importConfig);

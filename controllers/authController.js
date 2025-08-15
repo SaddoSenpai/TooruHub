@@ -31,8 +31,9 @@ exports.signup = async (req, res) => {
         await Promise.all([
             pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'Character Info Block', 'user', '<<CHARACTER_INFO>>', 0, slot]),
             pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'Scenario Info Block', 'user', '<<SCENARIO_INFO>>', 1, slot]),
-            pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'User Info Block', 'user', '<<USER_INFO>>', 2, slot]),
-            pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'Chat History Block', 'user', '<<CHAT_HISTORY>>', 3, slot])
+            pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'Summary Block', 'user', '<<SUMMARY>>', 2, slot]),
+            pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'User Info Block', 'user', '<<USER_INFO>>', 3, slot]),
+            pool.query(`INSERT INTO prompt_blocks (user_id, name, role, content, position, config_slot) VALUES ($1, $2, $3, $4, $5, $6)`, [userId, 'Chat History Block', 'user', '<<CHAT_HISTORY>>', 4, slot])
         ]);
     }
     res.json({ username, proxy_token: token });

@@ -6,7 +6,7 @@ const cache = require('../services/cacheService'); // <-- NEW
 
 // --- NEW: Helper function to clear a user's key caches ---
 function clearUserKeyCaches(userId) {
-    const providers = ['gemini', 'openai', 'openrouter', 'llm7'];
+    const providers = ['gemini', 'openai', 'openrouter', 'llm7', 'deepseek'];
     const cacheKeys = providers.map(p => `keys:${userId}:${p}`);
     cache.del(cacheKeys);
     console.log(`[Cache] DELETED key caches for user ${userId}: ${cacheKeys.join(', ')}`);
@@ -82,7 +82,7 @@ exports.testKey = async (req, res) => {
         let testPayload, testUrl, headers;
 
         if (provider === 'gemini') {
-            testUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${decryptedKey}`;
+            testUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${decryptedKey}`;
             testPayload = { contents: [{ parts: [{ text: "hello" }] }] };
             headers = { 'Content-Type': 'application/json' };
         } else if (provider === 'openai') {
@@ -96,6 +96,10 @@ exports.testKey = async (req, res) => {
         } else if (provider === 'llm7') {
             testUrl = 'https://api.llm7.io/v1/chat/completions';
             testPayload = { model: 'open-mistral-7b', messages: [{ role: 'user', content: 'hello' }], max_tokens: 1 };
+            headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${decryptedKey}` };
+        } else if (provider === 'deepseek') {
+            testUrl = 'https://api.deepseek.com/chat/completions';
+            testPayload = { model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello' }], max_tokens: 1 };
             headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${decryptedKey}` };
         } else {
             return res.status(400).json({ error: 'Testing not supported for this provider.' });
