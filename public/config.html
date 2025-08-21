@@ -36,77 +36,43 @@
     .save-config-btn:hover { background-color: #218838; }
     .discard-changes-btn { background-color: #6c757d; color: white; }
     .discard-changes-btn:hover { background-color: #5a6268; }
-    
     .block-item.is-disabled { opacity: 0.5; }
     .block-item.is-disabled .block-title { text-decoration: line-through; }
-
-    /* --- Modern Switch Toggle --- */
-    .switch-toggle {
-      position: relative;
-      display: inline-block;
-      width: 50px;
-      height: 28px;
-      flex-shrink: 0; /* Prevents the toggle from shrinking */
+    .switch-toggle { position: relative; display: inline-block; width: 50px; height: 28px; flex-shrink: 0; }
+    .switch-toggle input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; }
+    .slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 4px; background-color: white; transition: .4s; }
+    input:checked + .slider { background-color: #28a745; }
+    input:focus + .slider { box-shadow: 0 0 1px #28a745; }
+    input:checked + .slider:before { transform: translateX(22px); }
+    .slider.round { border-radius: 34px; }
+    .slider.round:before { border-radius: 50%; }
+    .global-settings { background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; padding: 1rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
+    /* --- NEW BLOCKER STYLE --- */
+    #predefined-mode-blocker {
+        text-align: center;
+        background-color: #dc3545;
+        color: white;
+        padding: 2rem;
+        border-radius: 8px;
+        margin: 2rem auto;
+        max-width: 600px;
     }
-    .switch-toggle input {
-      opacity: 0;
-      width: 0;
-      height: 0;
-    }
-    .slider {
-      position: absolute;
-      cursor: pointer;
-      top: 0;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      background-color: #ccc; /* Grey for inactive */
-      transition: .4s;
-    }
-    .slider:before {
-      position: absolute;
-      content: "";
-      height: 20px;
-      width: 20px;
-      left: 4px;
-      bottom: 4px;
-      background-color: white;
-      transition: .4s;
-    }
-    input:checked + .slider {
-      background-color: #28a745; /* Green for active */
-    }
-    input:focus + .slider {
-      box-shadow: 0 0 1px #28a745;
-    }
-    input:checked + .slider:before {
-      transform: translateX(22px);
-    }
-    .slider.round {
-      border-radius: 34px;
-    }
-    .slider.round:before {
-      border-radius: 50%;
-    }
-    /* --- End of Switch Styles --- */
-
-    /* --- Global Settings Box (Mobile Responsive) --- */
-    .global-settings {
-      background-color: #f9f9f9;
-      border: 1px solid #ddd;
-      border-radius: 8px;
-      margin-bottom: 1rem;
-      padding: 1rem;
-      display: flex;
-      align-items: center;
-      justify-content: space-between; /* Pushes items apart */
-      flex-wrap: wrap; /* Allows wrapping on small screens */
-      gap: 1rem;
-    }
+    #predefined-mode-blocker h1 { margin-top: 0; }
+    #predefined-mode-blocker a { color: white; font-weight: bold; text-decoration: underline; }
   </style>
 </head>
 <body>
-  <main class="container">
+  <!-- NEW: Blocker div shown when in pre-defined mode -->
+  <div id="predefined-mode-blocker" style="display:none;">
+    <h1>Editing Disabled</h1>
+    <p>You have "Use Pre-defined Structure" enabled on the dashboard. <br/> Custom prompt editing is disabled in this mode.</p>
+    <p>Please return to the dashboard and disable the toggle if you wish to edit your personal prompt structure.</p>
+    <a href="/">Go back to Dashboard</a>
+  </div>
+
+  <!-- MODIFIED: Main content is now wrappped -->
+  <main class="container" id="main-config-content">
     <h1>Prompt Structure — TooruHub</h1>
     
     <div class="config-tabs" id="configTabs">
@@ -115,7 +81,6 @@
       <button class="tab-btn" data-slot="3">Config 3</button>
     </div>
 
-    <!-- Global Settings Section -->
     <div class="global-settings">
       <label for="showThinkTagsToggleInput">Show Deepseek Reasoner <code>&lt;think&gt;</code> tags in stream</label>
       <label class="switch-toggle">
@@ -123,7 +88,6 @@
         <span class="slider round"></span>
       </label>
     </div>
-    <!-- End of Section -->
 
     <div id="tabContents">
       <div class="tab-content active" data-slot="1">
@@ -205,6 +169,7 @@
     const REQUIRED_PLACEHOLDERS = ['<<CHARACTER_INFO>>', '<<SCENARIO_INFO>>', '<<SUMMARY>>', '<<USER_INFO>>', '<<CHAT_HISTORY>>'];
 
     async function api(path, opts = {}) {
+      // ... (this function is unchanged)
       const headers = opts.headers || {};
       if (!opts.isFormData) headers['Content-Type'] = 'application/json';
       headers['Authorization'] = 'Bearer ' + proxyToken;
@@ -227,6 +192,7 @@
     }
 
     function validateConfig(blocks) {
+        // ... (this function is unchanged)
         const enabledBlocks = blocks.filter(b => b.is_enabled);
         const fullContent = enabledBlocks.map(b => b.content || '').join('');
         const missing = REQUIRED_PLACEHOLDERS.filter(p => !fullContent.includes(p));
@@ -234,6 +200,7 @@
     }
 
     function checkForUnsavedChanges(slot) {
+        // ... (this function is unchanged)
         const hasChanges = JSON.stringify(savedBlocksBySlot[slot]) !== JSON.stringify(draftBlocksBySlot[slot]);
         const tabContent = document.querySelector(`.tab-content[data-slot="${slot}"]`);
         tabContent.querySelector('.save-config-btn').disabled = !hasChanges;
@@ -241,6 +208,7 @@
     }
 
     function renderBlocks(slot) {
+        // ... (this function is unchanged)
         const container = document.querySelector(`.tab-content[data-slot="${slot}"] .blocksList`);
         const currentBlocks = draftBlocksBySlot[slot] || [];
         let html = '';
@@ -281,6 +249,7 @@
     }
 
     function attachBlockEventListeners(slot) {
+      // ... (this function is unchanged)
       document.querySelectorAll(`.tab-content[data-slot="${slot}"] .block-item`).forEach(blockEl => {
         const index = parseInt(blockEl.dataset.index, 10);
         
@@ -321,6 +290,7 @@
     }
 
     async function loadBlocks(slot) {
+      // ... (this function is unchanged)
       try {
         const { blocks } = await api(`/api/config?slot=${slot}`);
         savedBlocksBySlot[slot] = JSON.parse(JSON.stringify(blocks));
@@ -333,11 +303,17 @@
     }
 
     async function loadConfigMeta() {
+        // MODIFIED: Now also checks use_predefined_structure
         const meta = await api('/api/configs/meta');
+
+        if (meta.use_predefined_structure) {
+            $('predefined-mode-blocker').style.display = 'block';
+            $('main-config-content').style.display = 'none';
+            return false; // Indicate that normal load should stop
+        }
+
         configNames = [meta.config_name_1, meta.config_name_2, meta.config_name_3];
         proxyActiveSlot = meta.active_config_slot;
-
-        // Set the new global toggle state
         $('showThinkTagsToggleInput').checked = meta.show_think_tags;
 
         document.querySelectorAll('.tab-btn').forEach((btn, i) => {
@@ -349,9 +325,11 @@
             content.querySelector('.set-active-btn').style.display = (slot == proxyActiveSlot) ? 'none' : 'inline-block';
             content.querySelector('.active-indicator').style.display = (slot == proxyActiveSlot) ? 'inline-block' : 'none';
         });
+        return true; // Indicate successful load
     }
 
     function switchTab(slot) {
+        // ... (this function is unchanged)
         activeTab = slot;
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.slot == slot));
         document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.dataset.slot == slot));
@@ -364,16 +342,15 @@
     }
 
     function attachGlobalEventListeners() {
+        // ... (this function is mostly unchanged, just minor API call modification)
         $('showThinkTagsToggleInput').onchange = async (ev) => {
             try {
                 await api('/api/configs/settings', {
                     method: 'PUT',
                     body: { show_think_tags: ev.target.checked }
                 });
-                // Optional: add a small success indicator
             } catch (err) {
                 alert('Failed to save setting: ' + JSON.stringify(err));
-                // Revert toggle on failure
                 ev.target.checked = !ev.target.checked;
             }
         };
@@ -488,9 +465,11 @@
 
     window.onload = async () => {
       try {
-        await loadConfigMeta();
-        attachGlobalEventListeners();
-        switchTab(1);
+        const shouldContinue = await loadConfigMeta();
+        if (shouldContinue) {
+            attachGlobalEventListeners();
+            switchTab(1);
+        }
       } catch (err) {
         console.error("Failed to initialize config page:", err);
         const container = document.querySelector('.tab-content.active .blocksList');

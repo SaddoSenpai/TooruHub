@@ -1,6 +1,14 @@
 // services/promptService.js
 const pool = require('../config/db');
 const cache = require('./cacheService');
+const commandService = require('./commandService');
+
+class UserInputError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'UserInputError';
+  }
+}
 
 const DEFAULT_GEMINI_SAFETY_SETTINGS = [
   { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
@@ -15,7 +23,6 @@ async function parseJanitorInput(incomingMessages) {
   let userInfo = '';
   let scenarioInfo = '';
   let summaryInfo = '';
-  let chatHistory = [];
   const fullContent = (incomingMessages || []).map(m => m.content || '').join('\n\n');
   
   const charRegex = /<([^\s>]+)'s Persona>([\s\S]*?)<\/\1's Persona>/;
@@ -43,49 +50,130 @@ async function parseJanitorInput(incomingMessages) {
     summaryInfo = summaryMatch[1].trim();
   }
 
-  chatHistory = (incomingMessages || []).filter(m => {
-    const content = m.content || '';
-    return !content.includes("'s Persona>") && !content.includes("<UserPersona>") && !content.includes("<scenario>") && !content.includes("<summary>");
-  });
+  // --- NEW HISTORY CLEANING LOGIC ---
+  // 1. Filter out the persona/scenario/summary blocks.
+  // 2. Map over the remaining history to clean any assistant messages containing <w>.
+  const chatHistory = (incomingMessages || [])
+    .filter(m => {
+        const content = m.content || '';
+        return !content.includes("'s Persona>") && !content.includes("<UserPersona>") && !content.includes("<scenario>") && !content.includes("<summary>");
+    })
+    .map(m => {
+        // Check if it's an assistant message with the <w> tag.
+        if (m.role === 'assistant' && m.content && m.content.includes('<w>')) {
+            console.log('[History Cleaning] Found <w> tag in assistant message. Cleaning for next prompt.');
+            // Return a new message object with only the content after the tag.
+            return {
+                ...m,
+                content: m.content.split('<w>').pop().trim()
+            };
+        }
+        // Otherwise, return the message unmodified.
+        return m;
+    });
 
   return { characterName, characterInfo, userInfo, scenarioInfo, summaryInfo, chatHistory };
 }
 
-async function buildFinalMessages(userId, incomingBody) {
-    const activeSlotResult = await pool.query('SELECT active_config_slot FROM users WHERE id = $1', [userId]);
-    const activeSlot = activeSlotResult.rows[0]?.active_config_slot || 1;
-
+async function buildFinalMessages(userId, incomingBody, user) {
     if (incomingBody && incomingBody.bypass_prompt_structure) {
         return incomingBody.messages || [];
     }
 
-    const cacheKey = `blocks:enabled:${userId}:${activeSlot}`;
-    let userBlocks = cache.get(cacheKey);
+    let structureToUse = [];
 
-    if (userBlocks) {
-        console.log(`[Cache] HIT for ${cacheKey}`);
-    } else {
-        console.log(`[Cache] MISS for ${cacheKey}`);
-        const result = await pool.query('SELECT * FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 AND is_enabled = TRUE ORDER BY position', [userId, activeSlot]);
-        userBlocks = result.rows;
-        if (userBlocks.length > 0) {
-            cache.set(cacheKey, userBlocks);
+    if (user.use_predefined_structure) {
+        console.log(`[Proxy] User ${user.id} using Pre-defined Structure.`);
+        const cacheKey = 'global_structure';
+        let globalBlocks = cache.get(cacheKey);
+        if (!globalBlocks) {
+            console.log(`[Cache] MISS for ${cacheKey}`);
+            const result = await pool.query('SELECT * FROM global_prompt_blocks WHERE is_enabled = TRUE ORDER BY position');
+            globalBlocks = result.rows;
+            cache.set(cacheKey, globalBlocks, 600);
+        } else {
+            console.log(`[Cache] HIT for ${cacheKey}`);
         }
+        
+        const commandTags = commandService.parseCommandsFromMessages(incomingBody.messages);
+        const commandDefinitions = await commandService.getCommandDefinitions(commandTags);
+
+        const prefillCommands = commandDefinitions.filter(cmd => cmd.command_type === 'Prefill');
+        if (prefillCommands.length > 1) {
+            const conflictingTags = prefillCommands.map(cmd => `<${cmd.command_tag}>`).join(', ');
+            const errorMessage = `Error. Only 1 Prefill type command is allowed. ${conflictingTags} are prefill type commands. Please choose only one of them.`;
+            throw new UserInputError(errorMessage);
+        }
+
+        const hasPrefillCommand = prefillCommands.length > 0;
+
+        const commandsByType = {
+            'Jailbreak': [],
+            'Additional Commands': [],
+            'Prefill': []
+        };
+
+        if (commandDefinitions.length > 0) {
+            console.log(`[Proxy] Found commands: ${commandTags.join(', ')}. Injecting blocks.`);
+            commandDefinitions.forEach(cmd => {
+                if (commandsByType[cmd.command_type]) {
+                    commandsByType[cmd.command_type].push({
+                        name: cmd.block_name,
+                        role: cmd.block_role,
+                        content: cmd.block_content,
+                    });
+                }
+            });
+        }
+
+        const finalStructure = [];
+        for (const block of globalBlocks) {
+            if (block.block_type === 'Conditional Prefill') {
+                if (!hasPrefillCommand) {
+                    finalStructure.push(block);
+                }
+            } else if (block.block_type !== 'Standard') {
+                const commandsToInject = commandsByType[block.block_type];
+                if (commandsToInject && commandsToInject.length > 0) {
+                    finalStructure.push(...commandsToInject);
+                }
+            } else {
+                finalStructure.push(block);
+            }
+        }
+        structureToUse = finalStructure;
+
+    } else {
+        console.log(`[Proxy] User ${user.id} using Custom Structure.`);
+        const activeSlot = user.active_config_slot || 1;
+        const cacheKey = `blocks:enabled:${userId}:${activeSlot}`;
+        let userBlocks = cache.get(cacheKey);
+        if (userBlocks) {
+            console.log(`[Cache] HIT for ${cacheKey}`);
+        } else {
+            console.log(`[Cache] MISS for ${cacheKey}`);
+            const result = await pool.query('SELECT * FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 AND is_enabled = TRUE ORDER BY position', [userId, activeSlot]);
+            userBlocks = result.rows;
+            if (userBlocks.length > 0) {
+                cache.set(cacheKey, userBlocks);
+            }
+        }
+        structureToUse = userBlocks;
     }
 
-    if (!userBlocks || userBlocks.length === 0) {
+    if (!structureToUse || structureToUse.length === 0) {
         return incomingBody.messages || [];
     }
 
-    const fullConfigContent = userBlocks.map(b => b.content || '').join('');
+    const fullConfigContent = structureToUse.map(b => b.content || '').join('');
     if (!fullConfigContent.includes('<<CHARACTER_INFO>>') || !fullConfigContent.includes('<<SCENARIO_INFO>>') || !fullConfigContent.includes('<<USER_INFO>>') || !fullConfigContent.includes('<<CHAT_HISTORY>>') || !fullConfigContent.includes('<<SUMMARY>>')) {
-        throw new Error('Your active proxy configuration is invalid. It must contain all five placeholders in its ENABLED blocks: <<CHARACTER_INFO>>, <<SCENARIO_INFO>>, <<USER_INFO>>, <<CHAT_HISTORY>>, and <<SUMMARY>>. Please edit it in /config.');
+        throw new Error('The active prompt configuration is invalid. It must contain all five placeholders in its ENABLED blocks: <<CHARACTER_INFO>>, <<SCENARIO_INFO>>, <<USER_INFO>>, <<CHAT_HISTORY>>, and <<SUMMARY>>. Please contact the administrator or switch to a valid custom config.');
     }
 
     const { characterName, characterInfo, userInfo, scenarioInfo, summaryInfo, chatHistory } = await parseJanitorInput(incomingBody.messages);
     const finalMessages = [];
 
-    for (const block of userBlocks) {
+    for (const block of structureToUse) {
         let currentContent = block.content || '';
         const replacer = (text) => text
             .replace(/{{char}}/g, characterName)

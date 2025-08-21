@@ -29,6 +29,58 @@
       font-size: 0.9em;
       color: #666;
     }
+    /* --- Modern Switch Toggle --- */
+    .switch-toggle {
+      position: relative;
+      display: inline-block;
+      width: 50px;
+      height: 28px;
+      flex-shrink: 0;
+    }
+    .switch-toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+    .slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: #ccc;
+      transition: .4s;
+    }
+    .slider:before {
+      position: absolute;
+      content: "";
+      height: 20px;
+      width: 20px;
+      left: 4px;
+      bottom: 4px;
+      background-color: white;
+      transition: .4s;
+    }
+    input:checked + .slider {
+      background-color: #28a745;
+    }
+    input:checked + .slider:before {
+      transform: translateX(22px);
+    }
+    .slider.round {
+      border-radius: 34px;
+    }
+    .slider.round:before {
+      border-radius: 50%;
+    }
+    .form-row-flex {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 1rem;
+        padding: var(--spacing-sm) 0;
+    }
   </style>
 </head>
 <body>
@@ -54,7 +106,6 @@
     <section id="dashboard" style="display:none;">
       <h2>Dashboard</h2>
 
-      <!-- ADD THIS NEW STATS PANEL -->
       <div class="stats-panel">
         <div class="stat-item">
           <div class="value"><span id="statsCpu">--</span>%</div>
@@ -69,7 +120,6 @@
           <div class="label">Requests / Min</div>
         </div>
       </div>
-      <!-- END OF NEW STATS PANEL -->
 
       <p>Your TooruHub Token (keep private):</p>
       <pre id="proxyToken"></pre>
@@ -93,10 +143,25 @@
       <h3>Your stored keys</h3>
       <div id="keysList">Loading...</div>
 
+      <!-- NEW PROMPT MODE TOGGLE -->
       <hr />
+      <h3>Prompt Mode</h3>
+      <div class="form-row-flex">
+        <label for="promptModeToggle">Use Pre-defined Structure (Recommended)</label>
+        <label class="switch-toggle">
+          <input type="checkbox" id="promptModeToggle">
+          <span class="slider round"></span>
+        </label>
+      </div>
+      <p class="muted" id="promptModeDesc">
+        Enable for a stable, admin-managed prompt structure with support for special &lt;COMMANDS&gt;. 
+        Disable to use your own fully custom prompt structure from the /config page.
+      </p>
+
       <h3>Prompt Structure</h3>
       <p>Manage your prompt configurations. The active config will be used for all TooruHub requests.</p>
       <button id="btnManagePrompts">Manage Prompt Structure (/config)</button>
+      <!-- END NEW SECTION -->
 
       <hr />
       <h3>Example TooruHub Curl</h3>

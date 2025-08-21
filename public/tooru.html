@@ -1,0 +1,125 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Admin Panel — TooruHub</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    .config-tabs { display: flex; border-bottom: 1px solid #ddd; margin-bottom: 1rem; }
+    .tab-btn { background: #f1f1f1; border: 1px solid transparent; border-bottom: 0; padding: 10px 15px; cursor: pointer; font-size: 1em; }
+    .tab-btn.active { background: #fff; border-color: #ddd; border-bottom: 1px solid #fff; margin-bottom: -1px; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .config-actions { margin-bottom: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
+    .block-item, .add-block-form, .command-item, .add-command-form { background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; }
+    .block-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; flex-wrap: wrap; }
+    .block-title { flex: 1; font-size: 1.1em; min-width: 200px; }
+    .block-actions { display: flex; gap: 0.5rem; align-items: center; }
+    .block-actions .reorder-btns { display: flex; flex-direction: column; gap: 4px; margin-right: 0.5rem; }
+    .block-actions .reorder-btns button { line-height: 1; padding: 2px 6px; }
+    .edit-form { display: flex; flex-direction: column; gap: 0.75rem; }
+    .edit-form .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; }
+    .edit-form textarea { width: 100%; min-height: 150px; font-family: monospace; }
+    .edit-form-actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
+    .block-item .edit-form { display: none; }
+    .block-item.is-editing .block-header { display: none; }
+    .block-item.is-editing .edit-form { display: flex; }
+    .validation-error { color: #dc3545; font-weight: bold; border: 1px solid; padding: 0.5rem; margin-bottom: 1rem; }
+    .save-btn { background-color: #28a745; color: white; }
+    .discard-btn { background-color: #6c757d; color: white; }
+    .block-item.is-disabled { opacity: 0.5; }
+    .block-item.is-disabled .block-title { text-decoration: line-through; }
+    .block-item.is-injection-point { border-left: 4px solid #007bff; }
+    .block-item.is-conditional { border-left: 4px solid #ffc107; } /* NEW STYLE */
+    .block-item.is-injection-point .edit-content { background-color: #e9ecef; cursor: not-allowed; }
+    .switch-toggle { position: relative; display: inline-block; width: 50px; height: 28px; flex-shrink: 0; }
+    .switch-toggle input { opacity: 0; width: 0; height: 0; }
+    .slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #ccc; transition: .4s; }
+    .slider:before { position: absolute; content: ""; height: 20px; width: 20px; left: 4px; bottom: 4px; background-color: white; transition: .4s; }
+    input:checked + .slider { background-color: #28a745; }
+    input:checked + .slider:before { transform: translateX(22px); }
+    .slider.round { border-radius: 34px; }
+    .slider.round:before { border-radius: 50%; }
+    .command-item { flex-direction: row; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+    .import-btn { position: relative; }
+    .import-input { position: absolute; left: 0; top: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <h1>Admin Panel — TooruHub</h1>
+    
+    <div class="config-tabs" id="adminTabs">
+      <button class="tab-btn active" data-tab="structure">Global Structure</button>
+      <button class="tab-btn" data-tab="commands">Command Manager</button>
+    </div>
+
+    <div id="tabContents">
+      <!-- Global Structure Tab -->
+      <div class="tab-content active" data-tab="structure">
+        <h2>Global Pre-defined Structure</h2>
+        <p>This is the prompt structure used by all users who have "Use Pre-defined Structure" enabled. Changes here are live for them after saving.</p>
+        <div class="config-actions">
+          <button id="saveStructureBtn" class="save-btn" disabled>Save Global Structure</button>
+          <button id="discardStructureBtn" class="discard-btn" disabled>Discard Changes</button>
+          <button id="exportStructureBtn">Export</button>
+          <button class="import-btn">Import <input type="file" id="importStructureInput" class="import-input" accept=".json" /></button>
+        </div>
+        <div id="blocksList">Loading...</div>
+        <hr />
+        <h3>Add new block to draft</h3>
+        <div id="addBlockBox" class="add-block-form">
+          <div class="form-row">
+            <input id="new_name" placeholder="Name (eg. 'Jailbreak Placeholder')" />
+            <select id="new_role"><option value="system">system</option><option value="user">user</option><option value="assistant">assistant</option></select>
+          </div>
+          <div class="form-row">
+            <label for="new_block_type">Block Type:</label>
+            <select id="new_block_type">
+                <option value="Standard">Standard</option>
+                <option value="Jailbreak">Jailbreak Injection Point</option>
+                <option value="Additional Commands">Additional Commands Injection Point</option>
+                <option value="Prefill">Prefill Injection Point</option>
+                <option value="Conditional Prefill">Conditional Prefill (Fallback)</option> <!-- NEW OPTION -->
+            </select>
+          </div>
+          <textarea id="new_content" placeholder="Block content. (Not applicable for Injection Points)"></textarea>
+          <div class="edit-form-actions"><button id="btnAddBlock">Add block to draft</button></div>
+        </div>
+      </div>
+
+      <!-- Command Manager Tab -->
+      <div class="tab-content" data-tab="commands">
+        <h2>Command Manager</h2>
+        <p>Define commands that users can invoke by typing <code>&lt;COMMAND_TAG&gt;</code> in their prompt. The associated block will be dynamically injected into the corresponding Injection Point in the Global Structure.</p>
+        <div id="commandsList">Loading...</div>
+        <hr />
+        <h3>Add / Edit Command</h3>
+        <div id="addCommandBox" class="add-command-form">
+            <input type="hidden" id="cmd_id">
+            <div class="form-row">
+                <input id="cmd_tag" placeholder="COMMAND_TAG (e.g., JAILBREAKON)" />
+                <input id="cmd_name" placeholder="Block Name (e.g., 'JB V4')" />
+            </div>
+            <div class="form-row">
+                <select id="cmd_role"><option value="system">system</option><option value="user">user</option><option value="assistant">assistant</option></select>
+                <select id="cmd_type">
+                    <option value="Jailbreak">Jailbreak</option>
+                    <option value="Additional Commands">Additional Commands</option>
+                    <option value="Prefill">Prefill</option>
+                </select>
+            </div>
+            <textarea id="cmd_content" placeholder="The content of the block to be injected."></textarea>
+            <div class="edit-form-actions">
+                <button id="cmd_clear_btn" class="discard-btn">Clear Form</button>
+                <button id="cmd_save_btn" class="save-btn">Save Command</button>
+            </div>
+        </div>
+      </div>
+    </div>
+    <p><a href="/">Back to dashboard</a></p>
+  </main>
+  <script src="/tooru.js"></script>
+</body>
+</html>

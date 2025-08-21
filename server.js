@@ -19,6 +19,7 @@ const keyRoutes = require('./routes/keys');
 const configRoutes = require('./routes/config');
 const proxyRoutes = require('./routes/proxy');
 const statsRoutes = require('./routes/stats');
+const tooruRoutes = require('./routes/tooru'); // <-- NEW
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -40,6 +41,7 @@ app.use('/', authRoutes);
 app.use('/', keyRoutes);
 app.use('/api', configRoutes);
 app.use('/api', statsRoutes);
+app.use('/api/tooru', tooruRoutes); // <-- NEW ADMIN ROUTE
 
 // Add new dedicated route for llm7.io
 app.use('/llm7/v1', setProvider('llm7'), proxyRoutes);
@@ -54,6 +56,11 @@ app.get('/', (req, res) => {
 app.get('/config', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'config.html'));
 });
+// NEW: Serve the admin panel
+app.get('/tooru', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'tooru.html'));
+});
+
 
 // --- Server Startup ---
 (async () => {
