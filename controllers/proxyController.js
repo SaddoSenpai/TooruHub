@@ -6,14 +6,13 @@ const keyService = require('../services/keyService');
 const promptService =require('../services/promptService');
 const { decrypt } = require('../services/cryptoService');
 const statsService = require('../services/statsService');
-const { logGuestKeyUsage } = require('../services/guestUsageService'); // <-- NEW
+const { logGuestKeyUsage } = require('../services/guestUsageService');
 
 exports.handleProxyRequest = async (req, res) => {
   statsService.incrementRequestCount();
   const reqId = crypto.randomBytes(4).toString('hex');
   console.log(`\n[${new Date().toISOString()}] --- NEW REQUEST ${reqId} ---`);
   
-  // Determine if it's a registered user or a guest
   const isRegisteredUser = !!req.user;
   const isGuestUser = !!req.guest_api_key;
 
@@ -21,7 +20,7 @@ exports.handleProxyRequest = async (req, res) => {
       return res.status(401).json({ error: 'Invalid Authorization token.' });
   }
 
-  let rotatingKeyInfo = null; // To hold the key object for registered users
+  let rotatingKeyInfo = null;
   let provider;
 
   try {
@@ -43,7 +42,6 @@ exports.handleProxyRequest = async (req, res) => {
     console.log(`[${reqId}] User ${userIdForLogging} requesting model: ${model} via provider: ${provider}`);
 
     if (isRegisteredUser) {
-        // --- PATH 1: REGISTERED USER (Existing Logic) ---
         rotatingKeyInfo = await keyService.getRotatingKey(req.user.id, provider);
         if (!rotatingKeyInfo) {
           return res.status(400).json({ error: `No active API key available for provider '${provider}'. Please add one or reactivate a rate-limited key.`});
@@ -59,13 +57,11 @@ exports.handleProxyRequest = async (req, res) => {
         finalMessages = await promptService.buildFinalMessages(req.user.id, body, req.user, provider);
 
     } else { // isGuestUser
-        // --- PATH 2: GUEST USER (New Logic) ---
         const ip = req.ip || req.connection.remoteAddress;
         await logGuestKeyUsage(req.guest_api_key, provider, ip);
         
         apiKeyToUse = req.guest_api_key;
         
-        // Guest users ALWAYS use the pre-defined structure.
         const guestUserObject = { use_predefined_structure: true };
         finalMessages = await promptService.buildFinalMessages(null, body, guestUserObject, provider);
     }
@@ -77,13 +73,8 @@ exports.handleProxyRequest = async (req, res) => {
       return res.status(500).json({ error: 'TooruHub error: Failed to construct a valid prompt.' });
     }
     
-    // --- COMMON PROXY LOGIC ---
     if (provider === 'gemini') {
-      // ... (Gemini logic remains the same, just use `apiKeyToUse` instead of `apiKey`)
-      // For brevity, this block is condensed. The internal logic is identical.
-      // Ensure you replace `apiKey` with `apiKeyToUse` in the Gemini URLs.
-      const url = `...key=${encodeURIComponent(apiKeyToUse)}`;
-      // ...
+      // ... Gemini logic ...
     }
 
     if (provider === 'openrouter' || provider === 'openai' || provider === 'llm7' || provider === 'deepseek') {
@@ -130,22 +121,36 @@ exports.handleProxyRequest = async (req, res) => {
     const errorStatus = err.response?.status;
     const errorText = JSON.stringify(errorData);
 
-    // MODIFIED: Only deactivate keys for registered users.
     if (isRegisteredUser && rotatingKeyInfo && provider !== 'llm7' && (errorStatus === 429 || (errorText && errorText.toLowerCase().includes('rate limit exceeded')))) {
         const reason = `[${errorStatus}] ${errorText}`;
         await keyService.deactivateKey(rotatingKeyInfo.id, reason);
     }
 
-    const logError = { message: err.message, isAxiosError: err.isAxiosError, request: err.config ? { method: err.config.method, url: err.config.url } : undefined, response: err.response ? { status: err.response.status, data: err.response.data } : undefined };
-    console.error(`[${reqId}] --- PROXY ERROR ---`, JSON.stringify(logError, null, 2));
+    // --- THIS IS THE CORRECTED BLOCK ---
+    // Instead of using JSON.stringify on a potentially circular object,
+    // we log the useful parts directly. console.error can handle objects safely.
+    console.error(`[${reqId}] --- PROXY ERROR ---`);
+    console.error(`[${reqId}] Message: ${err.message}`);
+    if (err.response) {
+        console.error(`[${reqId}] Response Status: ${err.response.status}`);
+        console.error(`[${reqId}] Response Data:`, err.response.data);
+    }
+    if (err.config) {
+        console.error(`[${reqId}] Request URL: ${err.config.url}`);
+        console.error(`[${reqId}] Request Method: ${err.config.method}`);
+    }
+    // --- END OF CORRECTED BLOCK ---
     
     const finalErrorPayload = { error: 'TooruHub request failed', detail: err.response?.data ?? { message: err.message } };
-    res.status(errorStatus || 500).json(finalErrorPayload);
+    
+    // It's good practice to check if headers have already been sent, especially with streaming.
+    if (!res.headersSent) {
+        res.status(errorStatus || 500).json(finalErrorPayload);
+    }
   }
 };
 
 function createDeepseekThinkFilter() {
-    // ... (This function remains unchanged)
     console.log(`Applying <think> tag filter for deepseek-reasoner stream.`);
     let buffer = '';
     let isInsideThinkTag = false;
