@@ -12,6 +12,7 @@ require('./services/cacheService');
 require('./services/statsService'); 
 
 const { startReactivationJob } = require('./services/keyService');
+const { flexibleAuth } = require('./middleware/auth'); // <-- NEW
 
 // Import Routes
 const authRoutes = require('./routes/auth');
@@ -19,7 +20,7 @@ const keyRoutes = require('./routes/keys');
 const configRoutes = require('./routes/config');
 const proxyRoutes = require('./routes/proxy');
 const statsRoutes = require('./routes/stats');
-const tooruRoutes = require('./routes/tooru'); // <-- NEW
+const tooruRoutes = require('./routes/tooru');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -29,6 +30,7 @@ app.use(cors());
 app.use(bodyParser.json({ limit: '10mb' }));
 app.use(require('express-fileupload')());
 app.use(express.static(path.join(__dirname, 'public')));
+app.set('trust proxy', true); // <-- NEW: Important for getting correct IP address behind a proxy
 
 // Middleware to set provider based on route
 const setProvider = (provider) => (req, res, next) => {
@@ -41,12 +43,12 @@ app.use('/', authRoutes);
 app.use('/', keyRoutes);
 app.use('/api', configRoutes);
 app.use('/api', statsRoutes);
-app.use('/api/tooru', tooruRoutes); // <-- NEW ADMIN ROUTE
+app.use('/api/tooru', tooruRoutes);
 
-// Add new dedicated route for llm7.io
-app.use('/llm7/v1', setProvider('llm7'), proxyRoutes);
-// Original generic proxy route
-app.use('/v1', proxyRoutes);
+// MODIFIED: Proxy routes now use the new 'flexibleAuth' middleware
+// This allows them to accept either a TooruHub token OR a provider API key.
+app.use('/llm7/v1', setProvider('llm7'), flexibleAuth, proxyRoutes);
+app.use('/v1', flexibleAuth, proxyRoutes);
 
 
 // Static HTML serving for root and config page
@@ -56,7 +58,6 @@ app.get('/', (req, res) => {
 app.get('/config', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'config.html'));
 });
-// NEW: Serve the admin panel
 app.get('/tooru', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'tooru.html'));
 });

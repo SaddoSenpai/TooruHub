@@ -31,7 +31,7 @@
     .block-item.is-disabled { opacity: 0.5; }
     .block-item.is-disabled .block-title { text-decoration: line-through; }
     .block-item.is-injection-point { border-left: 4px solid #007bff; }
-    .block-item.is-conditional { border-left: 4px solid #ffc107; } /* NEW STYLE */
+    .block-item.is-conditional { border-left: 4px solid #ffc107; }
     .block-item.is-injection-point .edit-content { background-color: #e9ecef; cursor: not-allowed; }
     .switch-toggle { position: relative; display: inline-block; width: 50px; height: 28px; flex-shrink: 0; }
     .switch-toggle input { opacity: 0; width: 0; height: 0; }
@@ -59,7 +59,21 @@
       <!-- Global Structure Tab -->
       <div class="tab-content active" data-tab="structure">
         <h2>Global Pre-defined Structure</h2>
-        <p>This is the prompt structure used by all users who have "Use Pre-defined Structure" enabled. Changes here are live for them after saving.</p>
+        
+        <!-- NEW: Provider selection dropdown -->
+        <div class="form-row" style="margin-bottom: 1rem; max-width: 400px;">
+          <label for="providerSelector"><strong>Editing Structure for Provider:</strong></label>
+          <select id="providerSelector">
+            <option value="default">Default (Fallback)</option>
+            <option value="gemini">Gemini</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="openai">OpenAI</option>
+            <option value="llm7">llm7.io</option>
+            <option value="deepseek">Deepseek</option>
+          </select>
+        </div>
+
+        <p>This is the prompt structure used by all users who have "Use Pre-defined Structure" enabled. If a structure for a specific provider isn't defined, it will fall back to "Default".</p>
         <div class="config-actions">
           <button id="saveStructureBtn" class="save-btn" disabled>Save Global Structure</button>
           <button id="discardStructureBtn" class="discard-btn" disabled>Discard Changes</button>
@@ -81,7 +95,7 @@
                 <option value="Jailbreak">Jailbreak Injection Point</option>
                 <option value="Additional Commands">Additional Commands Injection Point</option>
                 <option value="Prefill">Prefill Injection Point</option>
-                <option value="Conditional Prefill">Conditional Prefill (Fallback)</option> <!-- NEW OPTION -->
+                <option value="Conditional Prefill">Conditional Prefill (Fallback)</option>
             </select>
           </div>
           <textarea id="new_content" placeholder="Block content. (Not applicable for Injection Points)"></textarea>

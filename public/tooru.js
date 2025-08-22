@@ -30,6 +30,7 @@ async function api(path, opts = {}) {
 
 // --- GLOBAL STATE ---
 let activeTab = 'structure';
+let activeProvider = 'default'; // NEW: State for the selected provider
 let savedBlocks = [];
 let draftBlocks = [];
 let commands = [];
@@ -64,7 +65,7 @@ function renderBlocks() {
         html += `<div class="validation-error"><strong>Invalid Configuration!</strong> Standard/Conditional blocks are missing: ${missing.join(', ')}</div>`;
     }
     if (draftBlocks.length === 0) {
-        html += '<i>No blocks defined.</i>';
+        html += `<i>No blocks defined for the '${activeProvider}' provider. It will use the 'Default' structure if one exists.</i>`;
     } else {
         html += draftBlocks.map((b, index) => {
             const isInjectionPoint = b.block_type === 'Jailbreak' || b.block_type === 'Additional Commands' || b.block_type === 'Prefill';
@@ -166,7 +167,8 @@ function attachBlockEventListeners() {
 
 async function loadGlobalBlocks() {
     try {
-        const { blocks } = await api('/global-blocks');
+        // MODIFIED: Pass the activeProvider to the API call
+        const { blocks } = await api(`/global-blocks?provider=${activeProvider}`);
         savedBlocks = JSON.parse(JSON.stringify(blocks));
         draftBlocks = JSON.parse(JSON.stringify(blocks));
         renderBlocks();
@@ -176,9 +178,8 @@ async function loadGlobalBlocks() {
     }
 }
 
-// --- COMMAND MANAGEMENT ---
+// --- COMMAND MANAGEMENT (Unchanged) ---
 function renderCommands() {
-    // ... (this function is unchanged)
     const container = $('commandsList');
     if (commands.length === 0) {
         container.innerHTML = '<i>No commands defined.</i>';
@@ -197,9 +198,7 @@ function renderCommands() {
     `).join('');
     attachCommandEventListeners();
 }
-
 function attachCommandEventListeners() {
-    // ... (this function is unchanged)
     $('commandsList').querySelectorAll('.command-item').forEach(el => {
         const id = el.dataset.id;
         el.querySelector('.cmd-edit-btn').onclick = () => {
@@ -223,17 +222,13 @@ function attachCommandEventListeners() {
         };
     });
 }
-
 function clearCommandForm() {
-    // ... (this function is unchanged)
     $('cmd_id').value = '';
     $('cmd_tag').value = '';
     $('cmd_name').value = '';
     $('cmd_content').value = '';
 }
-
 async function loadCommands() {
-    // ... (this function is unchanged)
     try {
         const data = await api('/commands');
         commands = data.commands;
@@ -251,6 +246,18 @@ window.onload = () => {
         btn.onclick = () => switchTab(btn.dataset.tab);
     });
 
+    // NEW: Listener for the provider selector dropdown
+    $('providerSelector').onchange = (e) => {
+        const hasChanges = JSON.stringify(savedBlocks) !== JSON.stringify(draftBlocks);
+        if (hasChanges && !confirm('You have unsaved changes for the current provider. Are you sure you want to switch and lose them?')) {
+            e.target.value = activeProvider; // Revert the dropdown change
+            return;
+        }
+        activeProvider = e.target.value;
+        $('blocksList').innerHTML = 'Loading...';
+        loadGlobalBlocks();
+    };
+
     // Structure tab listeners
     $('saveStructureBtn').onclick = async () => {
         const missing = validateStructure(draftBlocks);
@@ -258,11 +265,12 @@ window.onload = () => {
             return alert(`Cannot save. Structure is invalid. Missing from Standard/Conditional blocks: ${missing.join(', ')}`);
         }
         try {
-            const { blocks } = await api('/global-blocks', { method: 'PUT', body: { blocks: draftBlocks } });
+            // MODIFIED: Pass the activeProvider to the API call
+            const { blocks } = await api(`/global-blocks?provider=${activeProvider}`, { method: 'PUT', body: { blocks: draftBlocks } });
             savedBlocks = JSON.parse(JSON.stringify(blocks));
             draftBlocks = JSON.parse(JSON.stringify(blocks));
             renderBlocks();
-            alert('Global structure saved!');
+            alert(`Global structure for '${activeProvider}' saved!`);
         } catch (err) {
             alert('Failed to save: ' + JSON.stringify(err));
         }
@@ -288,12 +296,12 @@ window.onload = () => {
         renderBlocks();
     };
     $('exportStructureBtn').onclick = async () => {
-        const response = await fetch('/api/tooru/global-blocks/export', { headers: { 'Authorization': 'Bearer ' + proxyToken } });
+        const response = await fetch(`/api/tooru/global-blocks/export?provider=${activeProvider}`, { headers: { 'Authorization': 'Bearer ' + proxyToken } });
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = url;
-        a.download = 'tooruhub_global_structure.json';
+        a.download = `tooruhub_global_${activeProvider}.json`;
         document.body.appendChild(a);
         a.click();
         a.remove();
@@ -302,16 +310,16 @@ window.onload = () => {
     $('importStructureInput').onchange = async (ev) => {
         const file = ev.target.files[0];
         if (!file) return;
-        if (!confirm(`This will OVERWRITE the entire global structure. Are you sure?`)) {
+        if (!confirm(`This will OVERWRITE the entire global structure for '${activeProvider}'. Are you sure?`)) {
             ev.target.value = '';
             return;
         }
         try {
             const formData = new FormData();
             formData.append('configFile', file);
-            await api('/global-blocks/import', { method: 'POST', body: formData, isFormData: true });
+            await api(`/global-blocks/import?provider=${activeProvider}`, { method: 'POST', body: formData, isFormData: true });
             await loadGlobalBlocks();
-            alert('Global structure imported successfully!');
+            alert(`Global structure for '${activeProvider}' imported successfully!`);
         } catch (err) {
             alert('Import failed: ' + (err.detail || JSON.stringify(err)));
         } finally {

@@ -5,32 +5,40 @@ const cache = require('../services/cacheService');
 // --- Global Structure Management ---
 
 exports.getGlobalBlocks = async (req, res) => {
-    const result = await pool.query('SELECT * FROM global_prompt_blocks ORDER BY position');
+    // MODIFIED: Get provider from query string, fallback to 'default'
+    const provider = req.query.provider || 'default';
+    const result = await pool.query('SELECT * FROM global_prompt_blocks WHERE provider = $1 ORDER BY position', [provider]);
     res.json({ blocks: result.rows });
 };
 
 exports.updateGlobalBlocks = async (req, res) => {
+    // MODIFIED: Get provider from query string
+    const provider = req.query.provider || 'default';
     const { blocks } = req.body;
     if (!Array.isArray(blocks)) return res.status(400).json({ error: 'blocks array is required' });
 
     const client = await pool.connect();
     try {
         await client.query('BEGIN');
-        await client.query('DELETE FROM global_prompt_blocks');
+        // MODIFIED: Delete only the blocks for the specified provider
+        await client.query('DELETE FROM global_prompt_blocks WHERE provider = $1', [provider]);
 
         for (let i = 0; i < blocks.length; i++) {
             const block = blocks[i];
+            // MODIFIED: Insert the provider along with other block data
             await client.query(
-                'INSERT INTO global_prompt_blocks (name, role, content, position, is_enabled, block_type) VALUES ($1, $2, $3, $4, $5, $6)',
-                [block.name, block.role, block.content, i, block.is_enabled, block.block_type]
+                'INSERT INTO global_prompt_blocks (name, role, content, position, is_enabled, block_type, provider) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+                [block.name, block.role, block.content, i, block.is_enabled, block.block_type, provider]
             );
         }
         await client.query('COMMIT');
         
-        cache.del('global_structure');
-        console.log('[Cache] DELETED global_structure due to admin update.');
+        // MODIFIED: Invalidate the provider-specific cache key
+        const cacheKey = `global_structure:${provider}`;
+        cache.del(cacheKey);
+        console.log(`[Cache] DELETED ${cacheKey} due to admin update.`);
         
-        const result = await pool.query('SELECT * FROM global_prompt_blocks ORDER BY position');
+        const result = await pool.query('SELECT * FROM global_prompt_blocks WHERE provider = $1 ORDER BY position', [provider]);
         res.json({ blocks: result.rows });
 
     } catch (err) {
@@ -42,17 +50,18 @@ exports.updateGlobalBlocks = async (req, res) => {
     }
 };
 
-// --- NEW: Import/Export for Global Structure ---
 exports.exportGlobalStructure = async (req, res) => {
-    const blocksResult = await pool.query('SELECT name, role, content, is_enabled, block_type FROM global_prompt_blocks ORDER BY position');
-    const exportData = { configName: "TooruHub Global Structure", blocks: blocksResult.rows };
+    const provider = req.query.provider || 'default';
+    const blocksResult = await pool.query('SELECT name, role, content, is_enabled, block_type FROM global_prompt_blocks WHERE provider = $1 ORDER BY position', [provider]);
+    const exportData = { configName: `TooruHub Global Structure (${provider})`, blocks: blocksResult.rows };
     
     res.setHeader('Content-Type', 'application/json');
-    res.setHeader('Content-Disposition', `attachment; filename="tooruhub_global_structure.json"`);
+    res.setHeader('Content-Disposition', `attachment; filename="tooruhub_global_${provider}.json"`);
     res.send(JSON.stringify(exportData, null, 2));
 };
 
 exports.importGlobalStructure = async (req, res) => {
+    const provider = req.query.provider || 'default';
     if (!req.files || Object.keys(req.files).length === 0) {
         return res.status(400).json({ error: 'No file uploaded.' });
     }
@@ -66,18 +75,19 @@ exports.importGlobalStructure = async (req, res) => {
         }
         
         await client.query('BEGIN');
-        await client.query('DELETE FROM global_prompt_blocks');
+        await client.query('DELETE FROM global_prompt_blocks WHERE provider = $1', [provider]);
         for (let i = 0; i < importData.blocks.length; i++) {
             const block = importData.blocks[i];
             await client.query(
-                'INSERT INTO global_prompt_blocks (name, role, content, position, is_enabled, block_type) VALUES ($1, $2, $3, $4, $5, $6)',
-                [block.name, block.role, block.content, i, block.is_enabled, block.block_type || 'Standard']
+                'INSERT INTO global_prompt_blocks (name, role, content, position, is_enabled, block_type, provider) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+                [block.name, block.role, block.content, i, block.is_enabled, block.block_type || 'Standard', provider]
             );
         }
         await client.query('COMMIT');
         
-        cache.del('global_structure');
-        console.log(`[Cache] DELETED global_structure due to config import.`);
+        const cacheKey = `global_structure:${provider}`;
+        cache.del(cacheKey);
+        console.log(`[Cache] DELETED ${cacheKey} due to config import.`);
         res.json({ ok: true });
     } catch (err) {
         await client.query('ROLLBACK');
@@ -89,7 +99,7 @@ exports.importGlobalStructure = async (req, res) => {
 };
 
 
-// --- Command Management ---
+// --- Command Management (Unchanged) ---
 
 exports.getCommands = async (req, res) => {
     const result = await pool.query('SELECT * FROM commands ORDER BY command_tag');

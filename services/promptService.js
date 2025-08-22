@@ -50,32 +50,27 @@ async function parseJanitorInput(incomingMessages) {
     summaryInfo = summaryMatch[1].trim();
   }
 
-  // --- NEW HISTORY CLEANING LOGIC ---
-  // 1. Filter out the persona/scenario/summary blocks.
-  // 2. Map over the remaining history to clean any assistant messages containing <w>.
   const chatHistory = (incomingMessages || [])
     .filter(m => {
         const content = m.content || '';
         return !content.includes("'s Persona>") && !content.includes("<UserPersona>") && !content.includes("<scenario>") && !content.includes("<summary>");
     })
     .map(m => {
-        // Check if it's an assistant message with the <w> tag.
         if (m.role === 'assistant' && m.content && m.content.includes('<w>')) {
             console.log('[History Cleaning] Found <w> tag in assistant message. Cleaning for next prompt.');
-            // Return a new message object with only the content after the tag.
             return {
                 ...m,
                 content: m.content.split('<w>').pop().trim()
             };
         }
-        // Otherwise, return the message unmodified.
         return m;
     });
 
   return { characterName, characterInfo, userInfo, scenarioInfo, summaryInfo, chatHistory };
 }
 
-async function buildFinalMessages(userId, incomingBody, user) {
+// MODIFIED: Function now accepts the provider to fetch the correct structure
+async function buildFinalMessages(userId, incomingBody, user, provider) {
     if (incomingBody && incomingBody.bypass_prompt_structure) {
         return incomingBody.messages || [];
     }
@@ -83,14 +78,33 @@ async function buildFinalMessages(userId, incomingBody, user) {
     let structureToUse = [];
 
     if (user.use_predefined_structure) {
-        console.log(`[Proxy] User ${user.id} using Pre-defined Structure.`);
-        const cacheKey = 'global_structure';
+        console.log(`[Proxy] User ${userId || 'guest'} using Pre-defined Structure for provider: ${provider}.`);
+        
+        // MODIFIED: Cache key is now provider-specific
+        const cacheKey = `global_structure:${provider}`;
         let globalBlocks = cache.get(cacheKey);
+
         if (!globalBlocks) {
             console.log(`[Cache] MISS for ${cacheKey}`);
-            const result = await pool.query('SELECT * FROM global_prompt_blocks WHERE is_enabled = TRUE ORDER BY position');
-            globalBlocks = result.rows;
-            cache.set(cacheKey, globalBlocks, 600);
+            let result = await pool.query('SELECT * FROM global_prompt_blocks WHERE provider = $1 AND is_enabled = TRUE ORDER BY position', [provider]);
+            
+            // NEW: If no structure is found for the specific provider, fall back to the 'default' structure
+            if (result.rows.length === 0 && provider !== 'default') {
+                console.log(`[Proxy] No structure found for '${provider}', falling back to 'default' structure.`);
+                const fallbackCacheKey = 'global_structure:default';
+                globalBlocks = cache.get(fallbackCacheKey);
+                if (!globalBlocks) {
+                    console.log(`[Cache] MISS for ${fallbackCacheKey}`);
+                    result = await pool.query('SELECT * FROM global_prompt_blocks WHERE provider = $1 AND is_enabled = TRUE ORDER BY position', ['default']);
+                    globalBlocks = result.rows;
+                    if (globalBlocks.length > 0) cache.set(fallbackCacheKey, globalBlocks, 600);
+                } else {
+                    console.log(`[Cache] HIT for ${fallbackCacheKey}`);
+                }
+            } else {
+                globalBlocks = result.rows;
+                if (globalBlocks.length > 0) cache.set(cacheKey, globalBlocks, 600);
+            }
         } else {
             console.log(`[Cache] HIT for ${cacheKey}`);
         }
@@ -144,6 +158,7 @@ async function buildFinalMessages(userId, incomingBody, user) {
         structureToUse = finalStructure;
 
     } else {
+        // This path is only for registered users with pre-defined mode disabled.
         console.log(`[Proxy] User ${user.id} using Custom Structure.`);
         const activeSlot = user.active_config_slot || 1;
         const cacheKey = `blocks:enabled:${userId}:${activeSlot}`;
