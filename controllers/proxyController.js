@@ -102,7 +102,7 @@ exports.handleProxyRequest = async (req, res) => {
 
       if (body.stream) {
         console.log(`[${reqId}] Initializing Gemini stream...`);
-        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?key=${encodeURIComponent(apiKeyToUse)}&alt=sse`;
+        const url = `https://generativethresholdlanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?key=${encodeURIComponent(apiKeyToUse)}&alt=sse`;
         const providerResp = await axios.post(url, geminiRequestBody, { headers: { 'Content-Type': 'application/json' }, responseType: 'stream', timeout: 120000 });
         
         res.setHeader('Content-Type', 'text/event-stream');
@@ -214,22 +214,32 @@ exports.handleProxyRequest = async (req, res) => {
         return res.status(400).json({ error: 'Invalid command usage', detail: err.message });
     }
 
-    // --- THIS IS THE CORRECTED ERROR HANDLING BLOCK ---
+    // --- THIS IS THE FULLY CORRECTED ERROR HANDLING BLOCK ---
     const errorStatus = err.response?.status;
     
-    // We safely stringify only the response data, which is usually a simple JSON object.
-    const errorText = err.response?.data ? JSON.stringify(err.response.data) : null;
+    // Safely get a string representation of the error data for checking rate limits.
+    let errorTextForCheck = '';
+    if (err.response?.data) {
+        if (typeof err.response.data === 'object') {
+            // It's likely a JSON object, stringify it for the check.
+            errorTextForCheck = JSON.stringify(err.response.data);
+        } else {
+            // It could be a string, buffer, or stream. Convert it to a simple string.
+            errorTextForCheck = String(err.response.data);
+        }
+    }
 
-    if (isRegisteredUser && rotatingKeyInfo && provider !== 'llm7' && (errorStatus === 429 || (errorText && errorText.toLowerCase().includes('rate limit exceeded')))) {
-        const reason = `[${errorStatus}] ${errorText || 'Rate limit detected'}`;
+    if (isRegisteredUser && rotatingKeyInfo && provider !== 'llm7' && (errorStatus === 429 || (errorTextForCheck && errorTextForCheck.toLowerCase().includes('rate limit exceeded')))) {
+        const reason = `[${errorStatus}] ${errorTextForCheck || 'Rate limit detected'}`;
         await keyService.deactivateKey(rotatingKeyInfo.id, reason);
     }
 
-    // This robust logging avoids crashing on circular objects.
+    // This robust logging avoids crashing on circular objects from any provider.
     console.error(`[${reqId}] --- PROXY ERROR ---`);
     console.error(`[${reqId}] Message: ${err.message}`);
     if (err.response) {
         console.error(`[${reqId}] Response Status: ${err.response.status}`);
+        // We log the raw data here, which console.error handles safely.
         console.error(`[${reqId}] Response Data:`, err.response.data);
     }
     if (err.config) {
