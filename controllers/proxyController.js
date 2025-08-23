@@ -54,7 +54,8 @@ exports.handleProxyRequest = async (req, res) => {
         }
         apiKeyToUse = decryptedKey;
         
-        finalMessages = await promptService.buildFinalMessages(req.user.id, body, req.user, provider);
+        // MODIFIED: Pass reqId to the prompt service
+        finalMessages = await promptService.buildFinalMessages(reqId, req.user.id, body, req.user, provider);
 
     } else { // isGuestUser
         const ip = req.ip || req.connection.remoteAddress;
@@ -63,7 +64,8 @@ exports.handleProxyRequest = async (req, res) => {
         apiKeyToUse = req.guest_api_key;
         
         const guestUserObject = { use_predefined_structure: true };
-        finalMessages = await promptService.buildFinalMessages(null, body, guestUserObject, provider);
+        // MODIFIED: Pass reqId to the prompt service
+        finalMessages = await promptService.buildFinalMessages(reqId, null, body, guestUserObject, provider);
     }
 
     const keyIdForLogging = isRegisteredUser ? rotatingKeyInfo.id : 'guest';
@@ -221,6 +223,7 @@ exports.handleProxyRequest = async (req, res) => {
         try {
             errorTextForCheck = JSON.stringify(err.response.data);
         } catch (stringifyError) {
+            console.error(`[${reqId}] Could not stringify error.response.data. It is likely a complex stream object.`);
             errorTextForCheck = err.message || 'Complex stream error';
         }
     } else {
@@ -243,20 +246,14 @@ exports.handleProxyRequest = async (req, res) => {
         }
     }
     
-    // --- THIS IS THE DEFINITIVE ANTI-CRASH FIX ---
-    // We create a sanitized, safe object to send back to the user,
-    // as the raw error object can contain circular references that crash Express's res.json().
     let safeErrorDetail;
     if (err.response?.data) {
-        // If the error data is a stream or something complex, don't send it.
         if (typeof err.response.data.pipe === 'function') {
             safeErrorDetail = { error: "Stream error from provider", message: "The connection to the provider failed, which may be due to an invalid API key, rate limits, or a network issue." };
         } else {
-            // Otherwise, it's likely a valid JSON error from the API, which is safe to send.
             safeErrorDetail = err.response.data;
         }
     } else {
-        // Fallback if there's no response data at all.
         safeErrorDetail = { message: err.message };
     }
 
@@ -265,7 +262,6 @@ exports.handleProxyRequest = async (req, res) => {
     if (!res.headersSent) {
         res.status(errorStatus || 500).json(finalErrorPayload);
     }
-    // --- END OF FIX ---
   }
 };
 

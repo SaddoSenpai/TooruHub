@@ -11,11 +11,10 @@ class UserInputError extends Error {
 }
 
 const DEFAULT_GEMINI_SAFETY_SETTINGS = [
-  { category: "HARM_CATEGORY_CIVIC_INTEGRITY", threshold: "BLOCK_NONE" },
-  { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_NONE" },
-  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "BLOCK_NONE" },
+  { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "OFF" },
+  { category: "HARM_CATEGORY_SEXUALLY_EXPLICIT", threshold: "OFF" },
   { category: "HARM_CATEGORY_DANGEROUS_CONTENT", threshold: "OFF" },
-  { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_NONE" },
+  { category: "HARM_CATEGORY_HARASSMENT", threshold: "OFF" }
 ];
 
 async function parseJanitorInput(incomingMessages) {
@@ -70,8 +69,8 @@ async function parseJanitorInput(incomingMessages) {
   return { characterName, characterInfo, userInfo, scenarioInfo, summaryInfo, chatHistory };
 }
 
-// MODIFIED: Function now accepts the provider to fetch the correct structure
-async function buildFinalMessages(userId, incomingBody, user, provider) {
+// MODIFIED: Function now accepts reqId for logging
+async function buildFinalMessages(reqId, userId, incomingBody, user, provider) {
     if (incomingBody && incomingBody.bypass_prompt_structure) {
         return incomingBody.messages || [];
     }
@@ -79,9 +78,8 @@ async function buildFinalMessages(userId, incomingBody, user, provider) {
     let structureToUse = [];
 
     if (user.use_predefined_structure) {
-        console.log(`[Proxy] User ${userId || 'guest'} using Pre-defined Structure for provider: ${provider}.`);
+        console.log(`[${reqId}] User ${userId || 'guest'} using Pre-defined Structure for provider: ${provider}.`);
         
-        // MODIFIED: Cache key is now provider-specific
         const cacheKey = `global_structure:${provider}`;
         let globalBlocks = cache.get(cacheKey);
 
@@ -89,9 +87,8 @@ async function buildFinalMessages(userId, incomingBody, user, provider) {
             console.log(`[Cache] MISS for ${cacheKey}`);
             let result = await pool.query('SELECT * FROM global_prompt_blocks WHERE provider = $1 AND is_enabled = TRUE ORDER BY position', [provider]);
             
-            // NEW: If no structure is found for the specific provider, fall back to the 'default' structure
             if (result.rows.length === 0 && provider !== 'default') {
-                console.log(`[Proxy] No structure found for '${provider}', falling back to 'default' structure.`);
+                console.log(`[${reqId}] No structure found for '${provider}', falling back to 'default' structure.`);
                 const fallbackCacheKey = 'global_structure:default';
                 globalBlocks = cache.get(fallbackCacheKey);
                 if (!globalBlocks) {
@@ -129,7 +126,8 @@ async function buildFinalMessages(userId, incomingBody, user, provider) {
         };
 
         if (commandDefinitions.length > 0) {
-            console.log(`[Proxy] Found commands: ${commandTags.join(', ')}. Injecting blocks.`);
+            // --- THIS IS THE NEW LOGGING ---
+            console.log(`[${reqId}] Found commands: ${commandTags.join(', ')}. Injecting blocks.`);
             commandDefinitions.forEach(cmd => {
                 if (commandsByType[cmd.command_type]) {
                     commandsByType[cmd.command_type].push({
@@ -159,8 +157,7 @@ async function buildFinalMessages(userId, incomingBody, user, provider) {
         structureToUse = finalStructure;
 
     } else {
-        // This path is only for registered users with pre-defined mode disabled.
-        console.log(`[Proxy] User ${user.id} using Custom Structure.`);
+        console.log(`[${reqId}] User ${user.id} using Custom Structure.`);
         const activeSlot = user.active_config_slot || 1;
         const cacheKey = `blocks:enabled:${userId}:${activeSlot}`;
         let userBlocks = cache.get(cacheKey);
