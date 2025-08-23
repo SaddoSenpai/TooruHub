@@ -74,7 +74,110 @@ exports.handleProxyRequest = async (req, res) => {
     }
     
     if (provider === 'gemini') {
-      // ... Gemini logic ...
+      // --- THIS IS THE MODIFIED BLOCK ---
+      // The Gemini API (v1beta) does not use a 'system' role in its 'contents' array.
+      // Instead of a separate system_instruction, we will convert any 'system' messages
+      // into 'user' messages to ensure they are part of the conversational history.
+      // This is a robust way to handle multi-turn conversations with initial instructions.
+      const contents = finalMessages.map(m => {
+        const role = (m.role || 'user').toString();
+        let geminiRole;
+
+        if (role === 'assistant') {
+            geminiRole = 'model';
+        } else { // This covers both 'user' and 'system' roles
+            geminiRole = 'user';
+        }
+
+        return {
+            role: geminiRole,
+            parts: [{ text: m.content || '' }]
+        };
+      });
+      // --- END OF MODIFIED BLOCK ---
+
+      const geminiRequestBody = {
+        contents,
+        generation_config: { 
+            temperature: body.temperature, 
+            top_k: body.top_k ?? 5, 
+            top_p: body.top_p ?? 1 
+        },
+        safety_settings: body.safety_settings || promptService.DEFAULT_GEMINI_SAFETY_SETTINGS
+      };
+
+      if (body.stream) {
+        console.log(`[${reqId}] Initializing Gemini stream...`);
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:streamGenerateContent?key=${encodeURIComponent(apiKeyToUse)}&alt=sse`;
+        const providerResp = await axios.post(url, geminiRequestBody, { headers: { 'Content-Type': 'application/json' }, responseType: 'stream', timeout: 120000 });
+        
+        res.setHeader('Content-Type', 'text/event-stream');
+        res.setHeader('Cache-Control', 'no-cache');
+        res.setHeader('Connection', 'keep-alive');
+        res.flushHeaders && res.flushHeaders();
+
+        let buffer = '';
+        providerResp.data.on('data', (chunk) => {
+          buffer += chunk.toString();
+          let newlineIndex;
+          while ((newlineIndex = buffer.indexOf('\n')) !== -1) {
+            const line = buffer.substring(0, newlineIndex).trim();
+            buffer = buffer.substring(newlineIndex + 1);
+
+            if (line.startsWith('data: ')) {
+              const jsonStr = line.substring(6).trim();
+              if (jsonStr) {
+                try {
+                  const parsed = JSON.parse(jsonStr);
+                  const text = parsed?.candidates?.[0]?.content?.parts?.[0]?.text;
+                  
+                  if (text) {
+                    const formatted = { id: `chatcmpl-${reqId}`, object: "chat.completion.chunk", created: Math.floor(Date.now() / 1000), model, choices: [{ delta: { content: text }, index: 0, finish_reason: null }] };
+                    res.write(`data: ${JSON.stringify(formatted)}\n\n`);
+                  }
+                } catch (e) {
+                  console.error(`[${reqId}] Error parsing Gemini stream JSON:`, jsonStr, e);
+                }
+              }
+            }
+          }
+        });
+
+        providerResp.data.on('end', () => {
+          console.log(`[${reqId}] Gemini stream ended.`);
+          res.write('data: [DONE]\n\n');
+          res.end();
+        });
+
+        providerResp.data.on('error', (err) => {
+          console.error(`[${reqId}] Gemini stream connection error:`, err);
+          try { res.end(); } catch (e) {}
+        });
+        
+        return;
+      } else {
+        console.log(`[${reqId}] Initializing Gemini non-streaming request...`);
+        const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKeyToUse)}`;
+        const providerResp = await axios.post(url, geminiRequestBody, { headers: { 'Content-Type': 'application/json' }, timeout: 120000 });
+        
+        const candidate = providerResp.data?.candidates?.[0];
+        const responseText = candidate?.content?.parts?.[0]?.text ?? '';
+
+        const responsePayload = { 
+            id: `chatcmpl-${reqId}`, 
+            object: 'chat.completion', 
+            created: Math.floor(Date.now() / 1000), 
+            model, 
+            choices: [{ 
+                index: 0, 
+                message: { role: 'assistant', content: responseText }, 
+                finish_reason: candidate?.finishReason || 'stop' 
+            }], 
+            usage: { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 } 
+        };
+        
+        return res.json(responsePayload);
+      }
     }
 
     if (provider === 'openrouter' || provider === 'openai' || provider === 'llm7' || provider === 'deepseek') {
@@ -126,9 +229,6 @@ exports.handleProxyRequest = async (req, res) => {
         await keyService.deactivateKey(rotatingKeyInfo.id, reason);
     }
 
-    // --- THIS IS THE CORRECTED BLOCK ---
-    // Instead of using JSON.stringify on a potentially circular object,
-    // we log the useful parts directly. console.error can handle objects safely.
     console.error(`[${reqId}] --- PROXY ERROR ---`);
     console.error(`[${reqId}] Message: ${err.message}`);
     if (err.response) {
@@ -139,11 +239,9 @@ exports.handleProxyRequest = async (req, res) => {
         console.error(`[${reqId}] Request URL: ${err.config.url}`);
         console.error(`[${reqId}] Request Method: ${err.config.method}`);
     }
-    // --- END OF CORRECTED BLOCK ---
     
     const finalErrorPayload = { error: 'TooruHub request failed', detail: err.response?.data ?? { message: err.message } };
     
-    // It's good practice to check if headers have already been sent, especially with streaming.
     if (!res.headersSent) {
         res.status(errorStatus || 500).json(finalErrorPayload);
     }
