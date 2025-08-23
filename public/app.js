@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 let proxyToken = localStorage.getItem('proxy_token') || null;
 let statsInterval = null;
-let userSettings = {}; // <-- NEW: To store user settings
+let userSettings = {}; // <-- To store user settings
 
 async function api(path, opts = {}) {
   const headers = opts.headers || {};
@@ -26,8 +26,9 @@ async function updateStats() {
     }
 }
 
-// --- NEW: Function to update UI based on settings ---
+// --- MODIFIED: Function to update UI based on settings ---
 function updateUIWithSettings() {
+    // Prompt Mode Toggle
     const usePredefined = userSettings.use_predefined_structure;
     $('promptModeToggle').checked = usePredefined;
     $('btnManagePrompts').disabled = usePredefined;
@@ -40,6 +41,9 @@ function updateUIWithSettings() {
         $('btnManagePrompts').title = '';
         $('promptModeDesc').innerHTML = `Pre-defined mode is <strong>OFF</strong>. Your custom prompt structure from the <a href="/config">/config</a> page will be used.`;
     }
+
+    // Deepseek Think Tags Toggle
+    $('showThinkTagsToggle').checked = userSettings.show_think_tags;
 }
 
 async function loadUserSettings() {
@@ -70,7 +74,7 @@ curl "http://localhost:3000/v1/chat/completions" \\
   -d '{ "model":"gemini-pro", "messages":[{"role":"user","content":"Explain to me how AI works"}] }'`;
   
   loadKeys();
-  loadUserSettings(); // <-- NEW
+  loadUserSettings();
 
   if (statsInterval) clearInterval(statsInterval);
   updateStats();
@@ -78,7 +82,6 @@ curl "http://localhost:3000/v1/chat/completions" \\
 }
 
 async function loadKeys() {
-  // ... (this function is unchanged)
   try {
     const providerDisplayNames = {
         gemini: 'gemini',
@@ -167,7 +170,6 @@ window.onload = () => {
   if (proxyToken) showDashboard();
 
   $('btnSignup').onclick = async () => {
-    // ... (this function is unchanged)
     const username = $('su_username').value;
     const password = $('su_password').value;
     try {
@@ -181,7 +183,6 @@ window.onload = () => {
   };
 
   $('btnLogin').onclick = async () => {
-    // ... (this function is unchanged)
     const username = $('li_username').value;
     const password = $('li_password').value;
     try {
@@ -195,7 +196,6 @@ window.onload = () => {
   };
 
   $('btnRegenerate').onclick = async () => {
-    // ... (this function is unchanged)
     if (!confirm('Regenerate token? This will invalidate your old token.')) return;
     try {
       const j = await api('/regenerate-token', { method: 'POST' });
@@ -207,7 +207,6 @@ window.onload = () => {
   };
 
   $('btnAddKey').onclick = async () => {
-    // ... (this function is unchanged)
     const provider = $('providerSelect').value;
     const name = $('keyName').value;
     const apiKey = $('apiKey').value;
@@ -219,7 +218,6 @@ window.onload = () => {
     } catch (err) { alert('Failed: ' + JSON.stringify(err)); }
   };
 
-  // --- NEW: Event listener for the prompt mode toggle ---
   $('promptModeToggle').onchange = async (ev) => {
     const isChecked = ev.target.checked;
     try {
@@ -228,6 +226,22 @@ window.onload = () => {
             body: { use_predefined_structure: isChecked }
         });
         userSettings.use_predefined_structure = isChecked;
+        updateUIWithSettings();
+    } catch (err) {
+        alert('Failed to save setting: ' + JSON.stringify(err));
+        ev.target.checked = !isChecked; // Revert on failure
+    }
+  };
+
+  // --- NEW: Event listener for the Deepseek think tags toggle ---
+  $('showThinkTagsToggle').onchange = async (ev) => {
+    const isChecked = ev.target.checked;
+    try {
+        await api('/api/configs/settings', {
+            method: 'PUT',
+            body: { show_think_tags: isChecked }
+        });
+        userSettings.show_think_tags = isChecked;
         updateUIWithSettings();
     } catch (err) {
         alert('Failed to save setting: ' + JSON.stringify(err));

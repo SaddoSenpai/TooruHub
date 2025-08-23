@@ -3,7 +3,7 @@ const pool = require('../config/db');
 const cache = require('../services/cacheService');
 
 exports.getConfigMeta = async (req, res) => {
-    // MODIFIED: Also select the new use_predefined_structure flag
+    // MODIFIED: Also select the new show_think_tags flag
     const result = await pool.query('SELECT config_name_1, config_name_2, config_name_3, active_config_slot, show_think_tags, use_predefined_structure FROM users WHERE id = $1', [req.user.id]);
     res.json(result.rows[0]);
 };
@@ -15,7 +15,6 @@ exports.updateConfigMeta = async (req, res) => {
     res.json({ ok: true });
 };
 
-// MODIFIED: This endpoint now handles multiple user-level settings
 exports.updateUserSettings = async (req, res) => {
     const { show_think_tags, use_predefined_structure } = req.body;
     const updates = [];
@@ -43,7 +42,6 @@ exports.updateUserSettings = async (req, res) => {
     try {
         await pool.query(queryString, values);
         
-        // Invalidate user cache to reflect the change immediately
         const userCacheKey = `user:${req.user.proxy_token}`;
         cache.del(userCacheKey);
         console.log(`[Cache] DELETED ${userCacheKey} due to user settings change.`);
@@ -56,13 +54,11 @@ exports.updateUserSettings = async (req, res) => {
 };
 
 exports.getActiveConfig = async (req, res) => {
-    // ... (this function is unchanged)
     const result = await pool.query('SELECT active_config_slot FROM users WHERE id = $1', [req.user.id]);
     res.json(result.rows[0]);
 };
 
 exports.setActiveConfig = async (req, res) => {
-    // ... (this function is unchanged)
     const { slot } = req.body;
     if (![1, 2, 3].includes(slot)) { return res.status(400).json({ error: 'Invalid slot number' }); }
     await pool.query('UPDATE users SET active_config_slot = $1 WHERE id = $2', [slot, req.user.id]);
@@ -73,7 +69,6 @@ exports.setActiveConfig = async (req, res) => {
 };
 
 exports.exportConfig = async (req, res) => {
-    // ... (this function is unchanged)
     const slot = parseInt(req.query.slot, 10);
     if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
     
@@ -89,7 +84,6 @@ exports.exportConfig = async (req, res) => {
 };
 
 exports.importConfig = async (req, res) => {
-    // ... (this function is unchanged)
     const slot = parseInt(req.query.slot, 10);
     if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
     if (!req.files || Object.keys(req.files).length === 0) { return res.status(400).json({ error: 'No file uploaded.' }); }
@@ -130,7 +124,6 @@ exports.importConfig = async (req, res) => {
 };
 
 exports.getBlocks = async (req, res) => {
-  // ... (this function is unchanged)
   const slot = parseInt(req.query.slot, 10) || 1;
   if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
   const result = await pool.query('SELECT id, name, role, content, position, is_enabled FROM prompt_blocks WHERE user_id = $1 AND config_slot = $2 ORDER BY position', [req.user.id, slot]);
@@ -138,7 +131,6 @@ exports.getBlocks = async (req, res) => {
 };
 
 exports.updateSlotConfiguration = async (req, res) => {
-    // ... (this function is unchanged)
     const slot = parseInt(req.params.slot, 10);
     if (![1, 2, 3].includes(slot)) return res.status(400).json({ error: 'Invalid slot' });
 

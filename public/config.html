@@ -48,7 +48,6 @@
     .slider.round { border-radius: 34px; }
     .slider.round:before { border-radius: 50%; }
     .global-settings { background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; padding: 1rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
-    /* --- NEW BLOCKER STYLE --- */
     #predefined-mode-blocker {
         text-align: center;
         background-color: #dc3545;
@@ -63,7 +62,6 @@
   </style>
 </head>
 <body>
-  <!-- NEW: Blocker div shown when in pre-defined mode -->
   <div id="predefined-mode-blocker" style="display:none;">
     <h1>Editing Disabled</h1>
     <p>You have "Use Pre-defined Structure" enabled on the dashboard. <br/> Custom prompt editing is disabled in this mode.</p>
@@ -71,7 +69,6 @@
     <a href="/">Go back to Dashboard</a>
   </div>
 
-  <!-- MODIFIED: Main content is now wrappped -->
   <main class="container" id="main-config-content">
     <h1>Prompt Structure — TooruHub</h1>
     
@@ -81,13 +78,7 @@
       <button class="tab-btn" data-slot="3">Config 3</button>
     </div>
 
-    <div class="global-settings">
-      <label for="showThinkTagsToggleInput">Show Deepseek Reasoner <code>&lt;think&gt;</code> tags in stream</label>
-      <label class="switch-toggle">
-        <input type="checkbox" id="showThinkTagsToggleInput">
-        <span class="slider round"></span>
-      </label>
-    </div>
+    <!-- REMOVED: The global settings div with the think tags toggle has been removed from this page. -->
 
     <div id="tabContents">
       <div class="tab-content active" data-slot="1">
@@ -169,7 +160,6 @@
     const REQUIRED_PLACEHOLDERS = ['<<CHARACTER_INFO>>', '<<SCENARIO_INFO>>', '<<SUMMARY>>', '<<USER_INFO>>', '<<CHAT_HISTORY>>'];
 
     async function api(path, opts = {}) {
-      // ... (this function is unchanged)
       const headers = opts.headers || {};
       if (!opts.isFormData) headers['Content-Type'] = 'application/json';
       headers['Authorization'] = 'Bearer ' + proxyToken;
@@ -192,7 +182,6 @@
     }
 
     function validateConfig(blocks) {
-        // ... (this function is unchanged)
         const enabledBlocks = blocks.filter(b => b.is_enabled);
         const fullContent = enabledBlocks.map(b => b.content || '').join('');
         const missing = REQUIRED_PLACEHOLDERS.filter(p => !fullContent.includes(p));
@@ -200,7 +189,6 @@
     }
 
     function checkForUnsavedChanges(slot) {
-        // ... (this function is unchanged)
         const hasChanges = JSON.stringify(savedBlocksBySlot[slot]) !== JSON.stringify(draftBlocksBySlot[slot]);
         const tabContent = document.querySelector(`.tab-content[data-slot="${slot}"]`);
         tabContent.querySelector('.save-config-btn').disabled = !hasChanges;
@@ -208,7 +196,6 @@
     }
 
     function renderBlocks(slot) {
-        // ... (this function is unchanged)
         const container = document.querySelector(`.tab-content[data-slot="${slot}"] .blocksList`);
         const currentBlocks = draftBlocksBySlot[slot] || [];
         let html = '';
@@ -249,7 +236,6 @@
     }
 
     function attachBlockEventListeners(slot) {
-      // ... (this function is unchanged)
       document.querySelectorAll(`.tab-content[data-slot="${slot}"] .block-item`).forEach(blockEl => {
         const index = parseInt(blockEl.dataset.index, 10);
         
@@ -290,7 +276,6 @@
     }
 
     async function loadBlocks(slot) {
-      // ... (this function is unchanged)
       try {
         const { blocks } = await api(`/api/config?slot=${slot}`);
         savedBlocksBySlot[slot] = JSON.parse(JSON.stringify(blocks));
@@ -303,18 +288,16 @@
     }
 
     async function loadConfigMeta() {
-        // MODIFIED: Now also checks use_predefined_structure
         const meta = await api('/api/configs/meta');
 
         if (meta.use_predefined_structure) {
             $('predefined-mode-blocker').style.display = 'block';
             $('main-config-content').style.display = 'none';
-            return false; // Indicate that normal load should stop
+            return false;
         }
 
         configNames = [meta.config_name_1, meta.config_name_2, meta.config_name_3];
         proxyActiveSlot = meta.active_config_slot;
-        $('showThinkTagsToggleInput').checked = meta.show_think_tags;
 
         document.querySelectorAll('.tab-btn').forEach((btn, i) => {
             btn.textContent = configNames[i] || `Config ${i+1}`;
@@ -325,11 +308,10 @@
             content.querySelector('.set-active-btn').style.display = (slot == proxyActiveSlot) ? 'none' : 'inline-block';
             content.querySelector('.active-indicator').style.display = (slot == proxyActiveSlot) ? 'inline-block' : 'none';
         });
-        return true; // Indicate successful load
+        return true;
     }
 
     function switchTab(slot) {
-        // ... (this function is unchanged)
         activeTab = slot;
         document.querySelectorAll('.tab-btn').forEach(b => b.classList.toggle('active', b.dataset.slot == slot));
         document.querySelectorAll('.tab-content').forEach(c => c.classList.toggle('active', c.dataset.slot == slot));
@@ -342,19 +324,6 @@
     }
 
     function attachGlobalEventListeners() {
-        // ... (this function is mostly unchanged, just minor API call modification)
-        $('showThinkTagsToggleInput').onchange = async (ev) => {
-            try {
-                await api('/api/configs/settings', {
-                    method: 'PUT',
-                    body: { show_think_tags: ev.target.checked }
-                });
-            } catch (err) {
-                alert('Failed to save setting: ' + JSON.stringify(err));
-                ev.target.checked = !ev.target.checked;
-            }
-        };
-
         document.querySelectorAll('.tab-btn').forEach(btn => {
             btn.onclick = () => switchTab(btn.dataset.slot);
         });

@@ -143,9 +143,8 @@
       <h3>Your stored keys</h3>
       <div id="keysList">Loading...</div>
 
-      <!-- NEW PROMPT MODE TOGGLE -->
       <hr />
-      <h3>Prompt Mode</h3>
+      <h3>Prompt Settings</h3>
       <div class="form-row-flex">
         <label for="promptModeToggle">Use Pre-defined Structure (Recommended)</label>
         <label class="switch-toggle">
@@ -157,11 +156,21 @@
         Enable for a stable, admin-managed prompt structure with support for special &lt;COMMANDS&gt;. 
         Disable to use your own fully custom prompt structure from the /config page.
       </p>
+      
+      <!-- NEW DEEPSEEK SETTING -->
+      <div class="form-row-flex">
+        <label for="showThinkTagsToggle">Show Deepseek Reasoner <code>&lt;think&gt;</code> tags in stream</label>
+        <label class="switch-toggle">
+          <input type="checkbox" id="showThinkTagsToggle">
+          <span class="slider round"></span>
+        </label>
+      </div>
+      <p class="muted">Enable to see the reasoning process for <code>deepseek-reasoner</code> models. This setting applies to both Pre-defined and Custom prompt modes.</p>
+      <!-- END NEW SECTION -->
 
       <h3>Prompt Structure</h3>
       <p>Manage your prompt configurations. The active config will be used for all TooruHub requests.</p>
       <button id="btnManagePrompts">Manage Prompt Structure (/config)</button>
-      <!-- END NEW SECTION -->
 
       <hr />
       <h3>Example TooruHub Curl</h3>

@@ -54,7 +54,6 @@ exports.handleProxyRequest = async (req, res) => {
         }
         apiKeyToUse = decryptedKey;
         
-        // MODIFIED: Pass reqId to the prompt service
         finalMessages = await promptService.buildFinalMessages(reqId, req.user.id, body, req.user, provider);
 
     } else { // isGuestUser
@@ -64,7 +63,6 @@ exports.handleProxyRequest = async (req, res) => {
         apiKeyToUse = req.guest_api_key;
         
         const guestUserObject = { use_predefined_structure: true };
-        // MODIFIED: Pass reqId to the prompt service
         finalMessages = await promptService.buildFinalMessages(reqId, null, body, guestUserObject, provider);
     }
 
@@ -190,9 +188,22 @@ exports.handleProxyRequest = async (req, res) => {
         const resp = await axios.post(forwardUrl, forwardBody, { headers, responseType: 'stream', timeout: 120000 });
         res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('Connection', 'keep-alive');
         let finalStream = resp.data;
-        if (provider === 'deepseek' && modelLower === 'deepseek-reasoner' && req.user && !req.user.show_think_tags) {
+        
+        // --- MODIFIED LOGIC FOR DEEPSEEK FILTER ---
+        // Determine if the filter should be applied.
+        // It applies if the user is a guest (default on), OR if they are a registered user who has the setting turned off.
+        let applyFilter = false;
+        if (isGuestUser) {
+            applyFilter = true; // Guests always have the filter on.
+        } else if (isRegisteredUser && !req.user.show_think_tags) {
+            applyFilter = true; // Registered users have it on if their setting is false.
+        }
+
+        if (provider === 'deepseek' && modelLower === 'deepseek-reasoner' && applyFilter) {
             finalStream = finalStream.pipe(createDeepseekThinkFilter());
         }
+        // --- END OF MODIFIED LOGIC ---
+
         finalStream.pipe(res);
         return;
       }
