@@ -10,17 +10,18 @@ window.onload = async () => {
 
         if (data.commands && data.commands.length > 0) {
             const html = data.commands.map(cmd => {
-                // Escape potential HTML characters in user-defined names
-                const name = cmd.block_name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                const tag = cmd.command_tag.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                const fullTag = `<${tag}>`;
+                // Per your request:
+                // 1. Title is the command_tag (prefix)
+                // 2. Description is the block_name (title)
+                const title = cmd.command_tag.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                const description = cmd.block_name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                const fullTag = `<${cmd.command_tag}>`;
 
                 return `
                 <div class="command-card">
-                  <h3 class="command-title">${name}</h3>
-                  <p class="command-desc">Activates the "${name}" functionality.</p>
+                  <h3 class="command-title">${title}</h3>
+                  <p class="command-desc">${description}</p>
                   <div class="command-tag-box">
-                    <code>${fullTag}</code>
                     <button class="copy-btn" data-command="${fullTag}">📋</button>
                   </div>
                 </div>`;
@@ -30,14 +31,17 @@ window.onload = async () => {
             // Add event listeners to all copy buttons
             document.querySelectorAll('.copy-btn').forEach(button => {
                 button.onclick = (e) => {
-                    const commandToCopy = e.target.dataset.command;
+                    // Use currentTarget to ensure we get the button element
+                    const targetButton = e.currentTarget;
+                    const commandToCopy = targetButton.dataset.command;
+                    
                     navigator.clipboard.writeText(commandToCopy).then(() => {
-                        const originalText = button.textContent;
-                        button.textContent = 'Copied!';
-                        button.classList.add('copied');
+                        const originalText = targetButton.textContent;
+                        targetButton.textContent = 'Copied!';
+                        targetButton.classList.add('copied');
                         setTimeout(() => {
-                            button.textContent = originalText;
-                            button.classList.remove('copied');
+                            targetButton.textContent = originalText;
+                            targetButton.classList.remove('copied');
                         }, 1500);
                     }).catch(err => {
                         console.error('Failed to copy command: ', err);

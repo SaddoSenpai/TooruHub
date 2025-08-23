@@ -6,29 +6,19 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <link rel="stylesheet" href="/style.css" />
   <style>
-    :root {
-      --dark-bg: #12121c;
-      --card-bg: #1d1d2a;
-      --border-color-dark: #333344;
-      --primary-accent: #a972ff;
-      --text-light: #e0e0e0;
-      --text-muted: #888899;
-    }
-    body {
-      background-color: var(--dark-bg);
-      color: var(--text-light);
-    }
-    .container {
+    /* Styles specific to the commands page */
+    .container.commands-page {
       background-color: transparent;
       box-shadow: none;
+      border: none;
       max-width: 1200px;
     }
-    h1 {
+    .commands-page h1 {
       text-align: center;
-      color: var(--primary-accent);
       margin-bottom: 0.5rem;
+      font-size: 2.5em;
     }
-    .container > p {
+    .commands-page > p {
       text-align: center;
       color: var(--text-muted);
       max-width: 600px;
@@ -40,8 +30,8 @@
       gap: var(--spacing-lg);
     }
     .command-card {
-      background-color: var(--card-bg);
-      border: 1px solid var(--border-color-dark);
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
       border-radius: var(--border-radius);
       padding: var(--spacing-lg);
       display: flex;
@@ -51,8 +41,9 @@
     .command-title {
       font-size: 1.5em;
       font-weight: 600;
-      color: var(--primary-accent);
+      color: var(--accent-primary);
       margin: 0;
+      font-family: monospace;
     }
     .command-desc {
       color: var(--text-light);
@@ -60,43 +51,37 @@
       flex-grow: 1; /* Pushes the tag box down */
     }
     .command-tag-box {
-      background-color: var(--dark-bg);
+      background-color: var(--bg-dark);
       padding: var(--spacing-md);
       border-radius: var(--border-radius);
       display: flex;
-      justify-content: space-between;
+      justify-content: flex-end; /* Align button to the right */
       align-items: center;
-      font-family: monospace;
-    }
-    .command-tag-box code {
-      color: #ffae57; /* Orange color for the tag */
-      font-size: 1.1em;
+      min-height: 48px; /* Give it a consistent height */
     }
     .copy-btn {
       background: transparent;
-      border: 1px solid var(--border-color-dark);
+      border: 1px solid var(--border-color);
       color: var(--text-muted);
       cursor: pointer;
       padding: var(--spacing-xs) var(--spacing-sm);
       border-radius: var(--border-radius);
       transition: all 0.2s ease;
+      font-size: 1.2em;
     }
     .copy-btn:hover {
-      border-color: var(--primary-accent);
-      color: var(--primary-accent);
+      border-color: var(--accent-primary);
+      color: var(--accent-primary);
     }
     .copy-btn.copied {
-      background-color: var(--primary-accent);
-      color: var(--dark-bg);
-      border-color: var(--primary-accent);
-    }
-    a {
-      color: var(--primary-accent);
+      background-color: var(--accent-primary);
+      color: var(--bg-dark);
+      border-color: var(--accent-primary);
     }
   </style>
 </head>
 <body>
-  <main class="container">
+  <main class="container commands-page">
     <h1>Available Commands</h1>
     <p>Here is a list of commands you can use in your prompts when "Use Pre-defined Structure" is enabled on your dashboard. These tags will be replaced by pre-configured content blocks.</p>
     
