@@ -13,7 +13,8 @@ class CommandService {
             return [];
         }
         const fullText = messages.map(m => m.content || '').join(' ');
-        const commandRegex = /<([A-Z0-9_]+)>/g;
+        // MODIFIED: Added the '=' symbol to the allowed character set in the regex.
+        const commandRegex = /<([A-Z0-9_=]+)>/g;
         const matches = [...fullText.matchAll(commandRegex)];
         // Return unique, uppercase command tags found
         return [...new Set(matches.map(match => match[1].toUpperCase()))];
