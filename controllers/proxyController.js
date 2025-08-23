@@ -221,7 +221,6 @@ exports.handleProxyRequest = async (req, res) => {
         try {
             errorTextForCheck = JSON.stringify(err.response.data);
         } catch (stringifyError) {
-            console.error(`[${reqId}] Could not stringify error.response.data.`);
             errorTextForCheck = err.message || 'Complex stream error';
         }
     } else {
@@ -233,29 +232,40 @@ exports.handleProxyRequest = async (req, res) => {
         await keyService.deactivateKey(rotatingKeyInfo.id, reason);
     }
 
-    // --- THIS IS THE CLEANER LOGGING BLOCK ---
     console.error(`[${reqId}] --- PROXY ERROR ---`);
     console.error(`[${reqId}] Message: ${err.message}`);
     if (err.response) {
         console.error(`[${reqId}] Response Status: ${err.response.status}`);
-        // Check if the response data is a stream to avoid flooding logs.
         if (err.response.data && typeof err.response.data.pipe === 'function') {
             console.error(`[${reqId}] Response Data: [Stream Object - not logging full content]`);
         } else {
             console.error(`[${reqId}] Response Data:`, err.response.data);
         }
     }
-    if (err.config) {
-        console.error(`[${reqId}] Request URL: ${err.config.url}`);
-        console.error(`[${reqId}] Request Method: ${err.config.method}`);
-    }
-    // --- END OF CLEANER LOGGING BLOCK ---
     
-    const finalErrorPayload = { error: 'TooruHub request failed', detail: err.response?.data ?? { message: err.message } };
+    // --- THIS IS THE DEFINITIVE ANTI-CRASH FIX ---
+    // We create a sanitized, safe object to send back to the user,
+    // as the raw error object can contain circular references that crash Express's res.json().
+    let safeErrorDetail;
+    if (err.response?.data) {
+        // If the error data is a stream or something complex, don't send it.
+        if (typeof err.response.data.pipe === 'function') {
+            safeErrorDetail = { error: "Stream error from provider", message: "The connection to the provider failed, which may be due to an invalid API key, rate limits, or a network issue." };
+        } else {
+            // Otherwise, it's likely a valid JSON error from the API, which is safe to send.
+            safeErrorDetail = err.response.data;
+        }
+    } else {
+        // Fallback if there's no response data at all.
+        safeErrorDetail = { message: err.message };
+    }
+
+    const finalErrorPayload = { error: 'TooruHub request failed', detail: safeErrorDetail };
     
     if (!res.headersSent) {
         res.status(errorStatus || 500).json(finalErrorPayload);
     }
+    // --- END OF FIX ---
   }
 };
 
