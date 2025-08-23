@@ -155,26 +155,31 @@ a {
   color: var(--text-muted);
 }
 .tab-btn.active {
-  background: var(--block-bg);
-  color: var(--block-text);
-  border-color: var(--border-color) var(--border-color) var(--block-bg) var(--border-color);
+  background: var(--bg-dark);
+  color: var(--text-light);
+  border-color: var(--border-color) var(--border-color) var(--bg-dark) var(--border-color);
 }
 .tab-btn.is-proxy-active { font-weight: bold; color: var(--accent-save); }
 .active-indicator { color: var(--accent-save); }
 
-/* --- THE FIX FOR WHITE BLOCKS --- */
+/* --- Dark Theme for Blocks --- */
 .block-item, .add-block-form, .command-item, .add-command-form {
-  background-color: var(--block-bg);
-  color: var(--block-text);
-  border: 1px solid var(--block-border);
+  background-color: var(--bg-dark);
+  color: var(--text-light);
+  border: 1px solid var(--border-color);
   border-radius: var(--border-radius);
+  padding: var(--spacing-md);
+  margin-bottom: 1rem;
 }
 .block-item .block-title {
-  color: var(--block-text);
+  color: var(--text-light);
   font-weight: bold;
+  flex: 1;
+  font-size: 1.1em;
+  min-width: 200px;
 }
 .block-item .block-title small {
-  color: var(--block-text-muted);
+  color: var(--text-muted);
   font-weight: normal;
 }
 .block-item.is-disabled {
@@ -182,10 +187,39 @@ a {
 }
 .block-item.is-disabled .block-title {
   text-decoration: none;
-  color: var(--block-text-muted);
+  color: var(--text-muted);
 }
 .block-item.is-disabled .block-title strong {
-  color: var(--block-text-muted);
+  color: var(--text-muted);
+}
+
+/* --- New Block Header Layout --- */
+.block-header {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.75rem;
+}
+.block-header-main {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+.block-actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  justify-content: flex-end;
+}
+.block-actions .reorder-btns {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-right: 0.5rem;
+}
+.block-actions .reorder-btns button {
+  line-height: 1;
+  padding: 2px 6px;
 }
 
 /* --- Toggle Switch --- */

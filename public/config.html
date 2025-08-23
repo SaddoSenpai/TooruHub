@@ -13,12 +13,8 @@
     .tab-content { display: none; }
     .tab-content.active { display: block; }
     .config-actions { margin-bottom: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: center; }
-    .block-item, .add-block-form { background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; padding: 1rem; display: flex; flex-direction: column; gap: 1rem; transition: opacity 0.2s ease-in-out; }
-    .block-header { display: flex; justify-content: space-between; align-items: center; gap: 1rem; }
-    .block-title { flex: 1; font-size: 1.1em; }
-    .block-actions { display: flex; gap: 0.5rem; align-items: center; }
-    .block-actions .reorder-btns { display: flex; flex-direction: column; gap: 4px; margin-right: 0.5rem; }
-    .block-actions .reorder-btns button { line-height: 1; padding: 2px 6px; }
+    /* REMOVED: .block-item, .block-header, and related styles moved to style.css for dark theme and new layout */
+    .add-block-form { display: flex; flex-direction: column; gap: 1rem; }
     .edit-form { display: flex; flex-direction: column; gap: 0.75rem; }
     .edit-form .form-row { display: flex; gap: 0.5rem; }
     .edit-form .form-row input, .edit-form .form-row select { flex: 1; padding: 0.5rem; }
@@ -47,7 +43,6 @@
     input:checked + .slider:before { transform: translateX(22px); }
     .slider.round { border-radius: 34px; }
     .slider.round:before { border-radius: 50%; }
-    .global-settings { background-color: #f9f9f9; border: 1px solid #ddd; border-radius: 8px; margin-bottom: 1rem; padding: 1rem; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 1rem; }
     #predefined-mode-blocker {
         text-align: center;
         background-color: #dc3545;
@@ -212,11 +207,13 @@
             html += currentBlocks.map((b, index) => `
             <div class="block-item ${!b.is_enabled ? 'is-disabled' : ''}" data-index="${index}">
               <div class="block-header">
-                <label class="switch-toggle" title="Enable/Disable Block">
-                  <input type="checkbox" class="enable-toggle" ${b.is_enabled ? 'checked' : ''}>
-                  <span class="slider round"></span>
-                </label>
-                <div class="block-title"><strong>${b.name}</strong> <small>(${b.role})</small></div>
+                <div class="block-header-main">
+                  <label class="switch-toggle" title="Enable/Disable Block">
+                    <input type="checkbox" class="enable-toggle" ${b.is_enabled ? 'checked' : ''}>
+                    <span class="slider round"></span>
+                  </label>
+                  <div class="block-title"><strong>${b.name}</strong> <small>(${b.role})</small></div>
+                </div>
                 <div class="block-actions">
                   <div class="reorder-btns"><button class="up-btn">↑</button><button class="down-btn">↓</button></div>
                   <button class="edit-btn">Edit</button><button class="del-btn">Delete</button>
