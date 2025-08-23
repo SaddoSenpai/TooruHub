@@ -74,18 +74,13 @@ exports.handleProxyRequest = async (req, res) => {
     }
     
     if (provider === 'gemini') {
-      // --- THIS IS THE MODIFIED BLOCK ---
-      // The Gemini API (v1beta) does not use a 'system' role in its 'contents' array.
-      // Instead of a separate system_instruction, we will convert any 'system' messages
-      // into 'user' messages to ensure they are part of the conversational history.
-      // This is a robust way to handle multi-turn conversations with initial instructions.
       const contents = finalMessages.map(m => {
         const role = (m.role || 'user').toString();
         let geminiRole;
 
         if (role === 'assistant') {
             geminiRole = 'model';
-        } else { // This covers both 'user' and 'system' roles
+        } else {
             geminiRole = 'user';
         }
 
@@ -94,7 +89,6 @@ exports.handleProxyRequest = async (req, res) => {
             parts: [{ text: m.content || '' }]
         };
       });
-      // --- END OF MODIFIED BLOCK ---
 
       const geminiRequestBody = {
         contents,
@@ -220,15 +214,18 @@ exports.handleProxyRequest = async (req, res) => {
         return res.status(400).json({ error: 'Invalid command usage', detail: err.message });
     }
 
-    const errorData = err.response?.data;
+    // --- THIS IS THE CORRECTED ERROR HANDLING BLOCK ---
     const errorStatus = err.response?.status;
-    const errorText = JSON.stringify(errorData);
+    
+    // We safely stringify only the response data, which is usually a simple JSON object.
+    const errorText = err.response?.data ? JSON.stringify(err.response.data) : null;
 
     if (isRegisteredUser && rotatingKeyInfo && provider !== 'llm7' && (errorStatus === 429 || (errorText && errorText.toLowerCase().includes('rate limit exceeded')))) {
-        const reason = `[${errorStatus}] ${errorText}`;
+        const reason = `[${errorStatus}] ${errorText || 'Rate limit detected'}`;
         await keyService.deactivateKey(rotatingKeyInfo.id, reason);
     }
 
+    // This robust logging avoids crashing on circular objects.
     console.error(`[${reqId}] --- PROXY ERROR ---`);
     console.error(`[${reqId}] Message: ${err.message}`);
     if (err.response) {
@@ -239,6 +236,7 @@ exports.handleProxyRequest = async (req, res) => {
         console.error(`[${reqId}] Request URL: ${err.config.url}`);
         console.error(`[${reqId}] Request Method: ${err.config.method}`);
     }
+    // --- END OF CORRECTED BLOCK ---
     
     const finalErrorPayload = { error: 'TooruHub request failed', detail: err.response?.data ?? { message: err.message } };
     
