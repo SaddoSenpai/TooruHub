@@ -214,44 +214,42 @@ exports.handleProxyRequest = async (req, res) => {
         return res.status(400).json({ error: 'Invalid command usage', detail: err.message });
     }
 
-    // --- THIS IS THE DEFINITIVE FIX FOR THE CRASH ---
     const errorStatus = err.response?.status;
     
     let errorTextForCheck = '';
     if (err.response?.data) {
         try {
-            // This will succeed for normal JSON or text error responses.
             errorTextForCheck = JSON.stringify(err.response.data);
         } catch (stringifyError) {
-            // This will catch the circular structure error.
-            // We fall back to using the generic error message, which is safe.
-            console.error(`[${reqId}] Could not stringify error.response.data. It is likely a complex stream object.`);
+            console.error(`[${reqId}] Could not stringify error.response.data.`);
             errorTextForCheck = err.message || 'Complex stream error';
         }
     } else {
-        // If there's no response data at all, use the main error message.
         errorTextForCheck = err.message;
     }
 
     if (isRegisteredUser && rotatingKeyInfo && provider !== 'llm7' && (errorStatus === 429 || (errorTextForCheck && errorTextForCheck.toLowerCase().includes('rate limit exceeded')))) {
-        // Truncate the reason to prevent excessively long strings in the database.
         const reason = `[${errorStatus}] ${errorTextForCheck.substring(0, 250)}`;
         await keyService.deactivateKey(rotatingKeyInfo.id, reason);
     }
 
-    // This robust logging avoids crashing on circular objects.
+    // --- THIS IS THE CLEANER LOGGING BLOCK ---
     console.error(`[${reqId}] --- PROXY ERROR ---`);
     console.error(`[${reqId}] Message: ${err.message}`);
     if (err.response) {
         console.error(`[${reqId}] Response Status: ${err.response.status}`);
-        // We log the raw data here, which console.error handles safely without crashing.
-        console.error(`[${reqId}] Response Data:`, err.response.data);
+        // Check if the response data is a stream to avoid flooding logs.
+        if (err.response.data && typeof err.response.data.pipe === 'function') {
+            console.error(`[${reqId}] Response Data: [Stream Object - not logging full content]`);
+        } else {
+            console.error(`[${reqId}] Response Data:`, err.response.data);
+        }
     }
     if (err.config) {
         console.error(`[${reqId}] Request URL: ${err.config.url}`);
         console.error(`[${reqId}] Request Method: ${err.config.method}`);
     }
-    // --- END OF CORRECTED BLOCK ---
+    // --- END OF CLEANER LOGGING BLOCK ---
     
     const finalErrorPayload = { error: 'TooruHub request failed', detail: err.response?.data ?? { message: err.message } };
     
