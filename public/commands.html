@@ -1,0 +1,53 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Available Commands — TooruHub</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <link rel="stylesheet" href="/style.css" />
+  <style>
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+    }
+    th, td {
+      padding: var(--spacing-md);
+      border: 1px solid var(--border-color);
+      text-align: left;
+    }
+    th {
+      background-color: #f9f9f9;
+    }
+    td:first-child {
+      font-family: monospace;
+      font-weight: bold;
+      color: #0056b3;
+    }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <h1>Available Commands</h1>
+    <p>Here is a list of commands you can use in your prompts when "Use Pre-defined Structure" is enabled on your dashboard. These tags will be replaced by pre-configured content blocks.</p>
+    
+    <table>
+      <thead>
+        <tr>
+          <th>Command Tag</th>
+          <th>Description / Name</th>
+        </tr>
+      </thead>
+      <tbody id="commandsListBody">
+        <tr>
+          <td colspan="2">Loading commands...</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p style="margin-top: 2rem;"><a href="/">← Back to Dashboard</a></p>
+  </main>
+
+  <script src="/commands.js"></script>
+</body>
+</html>

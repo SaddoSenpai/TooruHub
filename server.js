@@ -12,7 +12,7 @@ require('./services/cacheService');
 require('./services/statsService'); 
 
 const { startReactivationJob } = require('./services/keyService');
-const { flexibleAuth } = require('./middleware/auth'); // <-- NEW
+const { flexibleAuth } = require('./middleware/auth');
 
 // Import Routes
 const authRoutes = require('./routes/auth');
@@ -21,6 +21,7 @@ const configRoutes = require('./routes/config');
 const proxyRoutes = require('./routes/proxy');
 const statsRoutes = require('./routes/stats');
 const tooruRoutes = require('./routes/tooru');
+const commandRoutes = require('./routes/commands'); // <-- NEW
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -30,7 +31,7 @@ app.use(cors());
 app.use(bodyParser.json({ limit: '10mb' }));
 app.use(require('express-fileupload')());
 app.use(express.static(path.join(__dirname, 'public')));
-app.set('trust proxy', true); // <-- NEW: Important for getting correct IP address behind a proxy
+app.set('trust proxy', true);
 
 // Middleware to set provider based on route
 const setProvider = (provider) => (req, res, next) => {
@@ -44,6 +45,7 @@ app.use('/', keyRoutes);
 app.use('/api', configRoutes);
 app.use('/api', statsRoutes);
 app.use('/api/tooru', tooruRoutes);
+app.use('/api', commandRoutes); // <-- NEW
 
 // MODIFIED: Proxy routes now use the new 'flexibleAuth' middleware
 // This allows them to accept either a TooruHub token OR a provider API key.
@@ -60,6 +62,10 @@ app.get('/config', (req, res) => {
 });
 app.get('/tooru', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'tooru.html'));
+});
+// --- NEW ---
+app.get('/commands', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'commands.html'));
 });
 
 
