@@ -10,18 +10,19 @@ window.onload = async () => {
 
         if (data.commands && data.commands.length > 0) {
             const html = data.commands.map(cmd => {
-                // Per your request:
-                // 1. Title is the command_tag (prefix)
-                // 2. Description is the block_name (title)
-                const title = cmd.command_tag.replace(/</g, '&lt;').replace(/>/g, '&gt;');
-                const description = cmd.block_name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                // Per your latest request:
+                // 1. Title is the descriptive block_name
+                // 2. Description is the command_tag (prefix)
+                const title = cmd.block_name.replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                const tag = cmd.command_tag.replace(/</g, '&lt;').replace(/>/g, '&gt;');
                 const fullTag = `<${cmd.command_tag}>`;
 
                 return `
                 <div class="command-card">
                   <h3 class="command-title">${title}</h3>
-                  <p class="command-desc">${description}</p>
+                  <p class="command-desc">${cmd.block_name}</p>
                   <div class="command-tag-box">
+                    <code>${tag}</code>
                     <button class="copy-btn" data-command="${fullTag}">📋</button>
                   </div>
                 </div>`;
@@ -31,7 +32,6 @@ window.onload = async () => {
             // Add event listeners to all copy buttons
             document.querySelectorAll('.copy-btn').forEach(button => {
                 button.onclick = (e) => {
-                    // Use currentTarget to ensure we get the button element
                     const targetButton = e.currentTarget;
                     const commandToCopy = targetButton.dataset.command;
                     

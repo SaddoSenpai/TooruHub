@@ -43,7 +43,6 @@
       font-weight: 600;
       color: var(--accent-primary);
       margin: 0;
-      font-family: monospace;
     }
     .command-desc {
       color: var(--text-light);
@@ -55,9 +54,14 @@
       padding: var(--spacing-md);
       border-radius: var(--border-radius);
       display: flex;
-      justify-content: flex-end; /* Align button to the right */
+      justify-content: space-between; /* Changed back */
       align-items: center;
-      min-height: 48px; /* Give it a consistent height */
+      min-height: 48px;
+      font-family: monospace;
+    }
+    .command-tag-box code {
+      color: #ffae57; /* Orange color for the tag */
+      font-size: 1.1em;
     }
     .copy-btn {
       background: transparent;
