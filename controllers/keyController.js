@@ -2,11 +2,11 @@
 const pool = require('../config/db');
 const axios = require('axios');
 const { encrypt, decrypt } = require('../services/cryptoService');
-const cache = require('../services/cacheService'); // <-- NEW
+const cache = require('../services/cacheService');
 
-// --- NEW: Helper function to clear a user's key caches ---
+// MODIFIED: Added 'mistral' to the list of providers.
 function clearUserKeyCaches(userId) {
-    const providers = ['gemini', 'openai', 'openrouter', 'llm7', 'deepseek'];
+    const providers = ['gemini', 'openai', 'openrouter', 'llm7', 'deepseek', 'mistral'];
     const cacheKeys = providers.map(p => `keys:${userId}:${p}`);
     cache.del(cacheKeys);
     console.log(`[Cache] DELETED key caches for user ${userId}: ${cacheKeys.join(', ')}`);
@@ -23,7 +23,7 @@ exports.addKey = async (req, res) => {
        ON CONFLICT (user_id, provider, name) DO UPDATE SET api_key = EXCLUDED.api_key, is_active = TRUE, deactivated_at = NULL, deactivation_reason = NULL`,
       [req.user.id, provider, keyName, encryptedKey]
     );
-    clearUserKeyCaches(req.user.id); // <-- Invalidate cache
+    clearUserKeyCaches(req.user.id);
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -40,7 +40,7 @@ exports.deleteKey = async (req, res) => {
   const id = req.params.id;
   const result = await pool.query('DELETE FROM api_keys WHERE id = $1 AND user_id = $2', [id, req.user.id]);
   if (result.rowCount === 0) { return res.status(404).json({ error: 'not found' }); }
-  clearUserKeyCaches(req.user.id); // <-- Invalidate cache
+  clearUserKeyCaches(req.user.id);
   res.json({ ok: true });
 };
 
@@ -48,7 +48,7 @@ exports.reactivateKey = async (req, res) => {
     const id = req.params.id;
     const result = await pool.query('UPDATE api_keys SET is_active = TRUE, deactivated_at = NULL, deactivation_reason = NULL WHERE id = $1 AND user_id = $2', [id, req.user.id]);
     if (result.rowCount === 0) { return res.status(404).json({ error: 'Key not found or does not belong to user.' }); }
-    clearUserKeyCaches(req.user.id); // <-- Invalidate cache
+    clearUserKeyCaches(req.user.id);
     res.json({ ok: true });
 };
 
@@ -61,12 +61,11 @@ exports.deactivateKey = async (req, res) => {
         [finalReason, id, req.user.id]
     );
     if (result.rowCount === 0) { return res.status(404).json({ error: 'Key not found or does not belong to user.' }); }
-    clearUserKeyCaches(req.user.id); // <-- Invalidate cache
+    clearUserKeyCaches(req.user.id);
     res.json({ ok: true });
 };
 
 exports.testKey = async (req, res) => {
-    // ... (this function is unchanged)
     const id = req.params.id;
     try {
         const keyResult = await pool.query('SELECT * FROM api_keys WHERE id = $1 AND user_id = $2', [id, req.user.id]);
@@ -100,6 +99,10 @@ exports.testKey = async (req, res) => {
         } else if (provider === 'deepseek') {
             testUrl = 'https://api.deepseek.com/chat/completions';
             testPayload = { model: 'deepseek-chat', messages: [{ role: 'user', content: 'hello' }], max_tokens: 1 };
+            headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${decryptedKey}` };
+        } else if (provider === 'mistral') { // <-- NEW
+            testUrl = 'https://api.mistral.ai/v1/chat/completions';
+            testPayload = { model: 'mistral-tiny', messages: [{ role: 'user', content: 'hello' }], max_tokens: 1 };
             headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${decryptedKey}` };
         } else {
             return res.status(400).json({ error: 'Testing not supported for this provider.' });

@@ -21,7 +21,7 @@ const configRoutes = require('./routes/config');
 const proxyRoutes = require('./routes/proxy');
 const statsRoutes = require('./routes/stats');
 const tooruRoutes = require('./routes/tooru');
-const commandRoutes = require('./routes/commands'); // <-- NEW
+const commandRoutes = require('./routes/commands');
 
 const PORT = process.env.PORT || 3000;
 const app = express();
@@ -45,11 +45,12 @@ app.use('/', keyRoutes);
 app.use('/api', configRoutes);
 app.use('/api', statsRoutes);
 app.use('/api/tooru', tooruRoutes);
-app.use('/api', commandRoutes); // <-- NEW
+app.use('/api', commandRoutes);
 
 // MODIFIED: Proxy routes now use the new 'flexibleAuth' middleware
 // This allows them to accept either a TooruHub token OR a provider API key.
 app.use('/llm7/v1', setProvider('llm7'), flexibleAuth, proxyRoutes);
+app.use('/mistral/v1', setProvider('mistral'), flexibleAuth, proxyRoutes); // <-- NEW
 app.use('/v1', flexibleAuth, proxyRoutes);
 
 
@@ -63,7 +64,6 @@ app.get('/config', (req, res) => {
 app.get('/tooru', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'tooru.html'));
 });
-// --- NEW ---
 app.get('/commands', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'commands.html'));
 });

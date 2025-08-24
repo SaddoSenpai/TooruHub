@@ -28,6 +28,8 @@ exports.handleProxyRequest = async (req, res) => {
     const model = (body.model || '').toString();
     const modelLower = model.toLowerCase();
     
+    // MODIFIED: Auto-detection logic now explicitly excludes Mistral.
+    // Mistral is only usable via its dedicated route.
     provider = req.provider_from_route || body.provider || req.headers['x-provider'];
     if (!provider) {
       if (modelLower.startsWith('gemini')) provider = 'gemini';
@@ -174,13 +176,15 @@ exports.handleProxyRequest = async (req, res) => {
       }
     }
 
-    if (provider === 'openrouter' || provider === 'openai' || provider === 'llm7' || provider === 'deepseek') {
+    // MODIFIED: Added 'mistral' to the list of OpenAI-compatible providers.
+    if (provider === 'openrouter' || provider === 'openai' || provider === 'llm7' || provider === 'deepseek' || provider === 'mistral') {
       const forwardBody = { ...body, messages: finalMessages, top_p: body.top_p ?? 1, top_k: body.top_k ?? 5 };
       let forwardUrl;
       if (provider === 'openrouter') forwardUrl = 'https://openrouter.ai/api/v1/chat/completions';
       else if (provider === 'openai') forwardUrl = 'https://api.openai.com/v1/chat/completions';
       else if (provider === 'llm7') forwardUrl = 'https://api.llm7.io/v1/chat/completions';
       else if (provider === 'deepseek') forwardUrl = 'https://api.deepseek.com/chat/completions';
+      else if (provider === 'mistral') forwardUrl = 'https://api.mistral.ai/v1/chat/completions'; // <-- NEW
       
       const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKeyToUse}` };
 
@@ -189,20 +193,16 @@ exports.handleProxyRequest = async (req, res) => {
         res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('Connection', 'keep-alive');
         let finalStream = resp.data;
         
-        // --- MODIFIED LOGIC FOR DEEPSEEK FILTER ---
-        // Determine if the filter should be applied.
-        // It applies if the user is a guest (default on), OR if they are a registered user who has the setting turned off.
         let applyFilter = false;
         if (isGuestUser) {
-            applyFilter = true; // Guests always have the filter on.
+            applyFilter = true;
         } else if (isRegisteredUser && !req.user.show_think_tags) {
-            applyFilter = true; // Registered users have it on if their setting is false.
+            applyFilter = true;
         }
 
         if (provider === 'deepseek' && modelLower === 'deepseek-reasoner' && applyFilter) {
             finalStream = finalStream.pipe(createDeepseekThinkFilter());
         }
-        // --- END OF MODIFIED LOGIC ---
 
         finalStream.pipe(res);
         return;

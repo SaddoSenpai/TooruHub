@@ -30,7 +30,7 @@ async function api(path, opts = {}) {
 
 // --- GLOBAL STATE ---
 let activeTab = 'structure';
-let activeProvider = 'default'; // NEW: State for the selected provider
+let activeProvider = 'default';
 let savedBlocks = [];
 let draftBlocks = [];
 let commands = [];
@@ -62,7 +62,9 @@ function renderBlocks() {
     let html = '';
     const missing = validateStructure(draftBlocks);
     if (missing.length > 0) {
-        html += `<div class="validation-error"><strong>Invalid Configuration!</strong> Standard/Conditional blocks are missing: ${missing.join(', ')}</div>`;
+        // MODIFIED: Escaped the HTML characters in the missing placeholders to fix the display bug.
+        const escapedMissing = missing.map(p => p.replace(/</g, '&lt;').replace(/>/g, '&gt;')).join(', ');
+        html += `<div class="validation-error"><strong>Invalid Configuration!</strong> Standard/Conditional blocks are missing: <code>${escapedMissing}</code></div>`;
     }
     if (draftBlocks.length === 0) {
         html += `<i>No blocks defined for the '${activeProvider}' provider. It will use the 'Default' structure if one exists.</i>`;
@@ -167,7 +169,6 @@ function attachBlockEventListeners() {
 
 async function loadGlobalBlocks() {
     try {
-        // MODIFIED: Pass the activeProvider to the API call
         const { blocks } = await api(`/global-blocks?provider=${activeProvider}`);
         savedBlocks = JSON.parse(JSON.stringify(blocks));
         draftBlocks = JSON.parse(JSON.stringify(blocks));
@@ -241,16 +242,14 @@ async function loadCommands() {
 
 // --- INITIALIZATION ---
 window.onload = () => {
-    // Tab switching
     $('adminTabs').querySelectorAll('.tab-btn').forEach(btn => {
         btn.onclick = () => switchTab(btn.dataset.tab);
     });
 
-    // NEW: Listener for the provider selector dropdown
     $('providerSelector').onchange = (e) => {
         const hasChanges = JSON.stringify(savedBlocks) !== JSON.stringify(draftBlocks);
         if (hasChanges && !confirm('You have unsaved changes for the current provider. Are you sure you want to switch and lose them?')) {
-            e.target.value = activeProvider; // Revert the dropdown change
+            e.target.value = activeProvider;
             return;
         }
         activeProvider = e.target.value;
@@ -258,14 +257,12 @@ window.onload = () => {
         loadGlobalBlocks();
     };
 
-    // Structure tab listeners
     $('saveStructureBtn').onclick = async () => {
         const missing = validateStructure(draftBlocks);
         if (missing.length > 0) {
             return alert(`Cannot save. Structure is invalid. Missing from Standard/Conditional blocks: ${missing.join(', ')}`);
         }
         try {
-            // MODIFIED: Pass the activeProvider to the API call
             const { blocks } = await api(`/global-blocks?provider=${activeProvider}`, { method: 'PUT', body: { blocks: draftBlocks } });
             savedBlocks = JSON.parse(JSON.stringify(blocks));
             draftBlocks = JSON.parse(JSON.stringify(blocks));
@@ -327,7 +324,6 @@ window.onload = () => {
         }
     };
 
-    // Command tab listeners
     $('cmd_clear_btn').onclick = clearCommandForm;
     $('cmd_save_btn').onclick = async () => {
         const id = $('cmd_id').value;
@@ -351,7 +347,6 @@ window.onload = () => {
         }
     };
 
-    // Initial data load
     loadGlobalBlocks();
     loadCommands();
 };

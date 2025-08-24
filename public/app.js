@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 let proxyToken = localStorage.getItem('proxy_token') || null;
 let statsInterval = null;
-let userSettings = {}; // <-- To store user settings
+let userSettings = {};
 
 async function api(path, opts = {}) {
   const headers = opts.headers || {};
@@ -26,9 +26,7 @@ async function updateStats() {
     }
 }
 
-// --- MODIFIED: Function to update UI based on settings ---
 function updateUIWithSettings() {
-    // Prompt Mode Toggle
     const usePredefined = userSettings.use_predefined_structure;
     $('promptModeToggle').checked = usePredefined;
     $('btnManagePrompts').disabled = usePredefined;
@@ -42,7 +40,6 @@ function updateUIWithSettings() {
         $('promptModeDesc').innerHTML = `Pre-defined mode is <strong>OFF</strong>. Your custom prompt structure from the <a href="/config">/config</a> page will be used.`;
     }
 
-    // Deepseek Think Tags Toggle
     $('showThinkTagsToggle').checked = userSettings.show_think_tags;
 }
 
@@ -67,6 +64,12 @@ curl "http://localhost:3000/llm7/v1/chat/completions" \\
   -H "Authorization: Bearer ${proxyToken}" \\
   -d '{ "model":"open-mistral-7b", "messages":[{"role":"user","content":"Explain to me how AI works"}] }'
 
+# To use the new Mistral-specific endpoint:
+curl "http://localhost:3000/mistral/v1/chat/completions" \\
+  -H "Content-Type: application/json" \\
+  -H "Authorization: Bearer ${proxyToken}" \\
+  -d '{ "model":"mistral-small-latest", "messages":[{"role":"user","content":"Explain to me how AI works"}] }'
+
 # To use the generic endpoint (auto-detects provider from model name):
 curl "http://localhost:3000/v1/chat/completions" \\
   -H "Content-Type: application/json" \\
@@ -83,10 +86,12 @@ curl "http://localhost:3000/v1/chat/completions" \\
 
 async function loadKeys() {
   try {
+    // MODIFIED: Added 'mistral' display name.
     const providerDisplayNames = {
         gemini: 'gemini',
         openrouter: 'openrouter',
         openai: 'openai',
+        mistral: 'Mistral AI',
         llm7: 'llm7.io',
         deepseek: 'deepseek'
     };
@@ -233,7 +238,6 @@ window.onload = () => {
     }
   };
 
-  // --- NEW: Event listener for the Deepseek think tags toggle ---
   $('showThinkTagsToggle').onchange = async (ev) => {
     const isChecked = ev.target.checked;
     try {
