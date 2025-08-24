@@ -28,8 +28,6 @@ exports.handleProxyRequest = async (req, res) => {
     const model = (body.model || '').toString();
     const modelLower = model.toLowerCase();
     
-    // MODIFIED: Auto-detection logic now explicitly excludes Mistral.
-    // Mistral is only usable via its dedicated route.
     provider = req.provider_from_route || body.provider || req.headers['x-provider'];
     if (!provider) {
       if (modelLower.startsWith('gemini')) provider = 'gemini';
@@ -176,50 +174,77 @@ exports.handleProxyRequest = async (req, res) => {
       }
     }
 
-    // MODIFIED: Added 'mistral' to the list of OpenAI-compatible providers.
-    if (provider === 'openrouter' || provider === 'openai' || provider === 'llm7' || provider === 'deepseek' || provider === 'mistral') {
-      const forwardBody = { ...body, messages: finalMessages, top_p: body.top_p ?? 1, top_k: body.top_k ?? 5 };
-      let forwardUrl;
-      if (provider === 'openrouter') forwardUrl = 'https://openrouter.ai/api/v1/chat/completions';
-      else if (provider === 'openai') forwardUrl = 'https://api.openai.com/v1/chat/completions';
-      else if (provider === 'llm7') forwardUrl = 'https://api.llm7.io/v1/chat/completions';
-      else if (provider === 'deepseek') forwardUrl = 'https://api.deepseek.com/chat/completions';
-      else if (provider === 'mistral') forwardUrl = 'https://api.mistral.ai/v1/chat/completions'; // <-- NEW
-      
-      const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKeyToUse}` };
+    // --- MODIFIED LOGIC BLOCK ---
+    // This block now separates Mistral from the others to handle its unique parameter requirements.
+    
+    let forwardBody;
+    let forwardUrl;
 
-      if (forwardBody.stream) {
-        const resp = await axios.post(forwardUrl, forwardBody, { headers, responseType: 'stream', timeout: 120000 });
-        res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('Connection', 'keep-alive');
-        let finalStream = resp.data;
+    if (provider === 'mistral') {
+        console.log(`[${reqId}] Building a sanitized request for Mistral API.`);
+        forwardUrl = 'https://api.mistral.ai/v1/chat/completions';
         
-        let applyFilter = false;
-        if (isGuestUser) {
-            applyFilter = true;
-        } else if (isRegisteredUser && !req.user.show_think_tags) {
-            applyFilter = true;
-        }
+        // Start with the essentials
+        forwardBody = {
+            model: body.model,
+            messages: finalMessages,
+        };
 
-        if (provider === 'deepseek' && modelLower === 'deepseek-reasoner' && applyFilter) {
-            finalStream = finalStream.pipe(createDeepseekThinkFilter());
-        }
+        // Add other supported parameters only if they exist in the original request.
+        // This prevents us from sending unsupported parameters like 'top_k'.
+        if (body.temperature !== undefined) forwardBody.temperature = body.temperature;
+        if (body.top_p !== undefined) forwardBody.top_p = body.top_p;
+        if (body.max_tokens !== undefined) forwardBody.max_tokens = body.max_tokens;
+        if (body.stream !== undefined) forwardBody.stream = body.stream;
+        if (body.safe_prompt !== undefined) forwardBody.safe_prompt = body.safe_prompt;
+        if (body.random_seed !== undefined) forwardBody.random_seed = body.random_seed;
+        if (body.tools) forwardBody.tools = body.tools;
+        if (body.tool_choice) forwardBody.tool_choice = body.tool_choice;
 
-        finalStream.pipe(res);
-        return;
-      }
-
-      const providerResp = await axios.post(forwardUrl, forwardBody, { headers, timeout: 120000 });
-      let responseData = providerResp.data;
-      if (provider === 'deepseek' && modelLower === 'deepseek-reasoner') {
-          const content = responseData.choices?.[0]?.message?.content;
-          if (content) {
-              responseData.choices[0].message.content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
-          }
-      }
-      return res.status(providerResp.status).json(responseData);
+    } else if (provider === 'openrouter' || provider === 'openai' || provider === 'llm7' || provider === 'deepseek') {
+        // These providers are more OpenAI-compatible, so we can use the old logic.
+        forwardBody = { ...body, messages: finalMessages, top_p: body.top_p ?? 1, top_k: body.top_k ?? 5 };
+        if (provider === 'openrouter') forwardUrl = 'https://openrouter.ai/api/v1/chat/completions';
+        else if (provider === 'openai') forwardUrl = 'https://api.openai.com/v1/chat/completions';
+        else if (provider === 'llm7') forwardUrl = 'https://api.llm7.io/v1/chat/completions';
+        else if (provider === 'deepseek') forwardUrl = 'https://api.deepseek.com/chat/completions';
+    } else {
+        return res.status(400).json({ error: `Unsupported provider '${provider}'.` });
     }
 
-    return res.status(400).json({ error: `Unsupported provider '${provider}'.` });
+    // The rest of the logic is now common for all OpenAI-like providers
+    const headers = { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKeyToUse}` };
+
+    if (forwardBody.stream) {
+      const resp = await axios.post(forwardUrl, forwardBody, { headers, responseType: 'stream', timeout: 120000 });
+      res.setHeader('Content-Type', 'text/event-stream'); res.setHeader('Cache-Control', 'no-cache'); res.setHeader('Connection', 'keep-alive');
+      let finalStream = resp.data;
+      
+      let applyFilter = false;
+      if (isGuestUser) {
+          applyFilter = true;
+      } else if (isRegisteredUser && !req.user.show_think_tags) {
+          applyFilter = true;
+      }
+
+      if (provider === 'deepseek' && modelLower === 'deepseek-reasoner' && applyFilter) {
+          finalStream = finalStream.pipe(createDeepseekThinkFilter());
+      }
+
+      finalStream.pipe(res);
+      return;
+    }
+
+    const providerResp = await axios.post(forwardUrl, forwardBody, { headers, timeout: 120000 });
+    let responseData = providerResp.data;
+    if (provider === 'deepseek' && modelLower === 'deepseek-reasoner') {
+        const content = responseData.choices?.[0]?.message?.content;
+        if (content) {
+            responseData.choices[0].message.content = content.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+        }
+    }
+    return res.status(providerResp.status).json(responseData);
+    // --- END OF MODIFIED LOGIC BLOCK ---
 
   } catch (err) {
     if (err.name === 'UserInputError') {
